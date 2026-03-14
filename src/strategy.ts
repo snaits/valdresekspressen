@@ -1,85 +1,15 @@
 import { BotAction, Coordinate } from './types';
 import { GameStateManager } from './gameState';
+import { Pathfinder } from './pathfinding';
 
 export class BotStrategy {
   private gameState: GameStateManager;
-  private botStuckRounds: Map<number, { position: [number, number], rounds: number }> = new Map();
-  private blockedCells: Set<string> = new Set(); // Track discovered obstacles
+  private pathfinder: Pathfinder;
+  private lastBotStates: Map<number, { pos: [number, number], action: string, stuckCount: number }> = new Map();
 
   constructor(gameState: GameStateManager) {
     this.gameState = gameState;
-  }
-
-  // BFS pathfinding - finds shortest path to target
-  private findPath(start: [number, number], target: [number, number], gridWidth: number, gridHeight: number, bots: any[]): [number, number][] {
-    if (start[0] === target[0] && start[1] === target[1]) return [target];
-
-    const queue: Array<{ pos: [number, number], path: [number, number][] }> = [{ pos: start, path: [start] }];
-    const visited = new Set<string>();
-    visited.add(`${start[0]},${start[1]}`);
-
-    // Get other bot positions
-    const botPositions = new Set(bots.map(b => `${b.position.x},${b.position.y}`));
-
-    while (queue.length > 0) {
-      const { pos, path } = queue.shift()!;
-      const [x, y] = pos;
-
-      // Try all 4 directions
-      const neighbors = [
-        [x + 1, y],
-        [x - 1, y],
-        [x, y + 1],
-        [x, y - 1]
-      ] as [number, number][];
-
-      for (const [nx, ny] of neighbors) {
-        // Check bounds
-        if (nx < 0 || nx >= gridWidth || ny < 0 || ny >= gridHeight) continue;
-
-        const key = `${nx},${ny}`;
-
-        // Check visited
-        if (visited.has(key)) continue;
-
-        // Check if blocked (obstacle or other bot)
-        if (this.blockedCells.has(key) || botPositions.has(key)) continue;
-
-        // Found target!
-        if (nx === target[0] && ny === target[1]) {
-          return [...path, [nx, ny]];
-        }
-
-        visited.add(key);
-        queue.push({ pos: [nx, ny], path: [...path, [nx, ny]] });
-      }
-    }
-
-    // No path found - mark target as unreachable
-    this.blockedCells.add(`${target[0]},${target[1]}`);
-    return [];
-  }
-
-  // Get next move towards target using pathfinding
-  private moveTowardWithPath(botId: number, start: [number, number], target: [number, number], gridWidth: number, gridHeight: number, bots: any[]): BotAction {
-    const path = this.findPath(start, target, gridWidth, gridHeight, bots);
-
-    if (path.length <= 1) {
-      // No path or already at target
-      return { bot: botId, action: 'wait' };
-    }
-
-    // Move to next step in path
-    const next = path[1];
-    const x = start[0];
-    const y = start[1];
-
-    if (next[0] > x) return { bot: botId, action: 'move_right' };
-    if (next[0] < x) return { bot: botId, action: 'move_left' };
-    if (next[1] > y) return { bot: botId, action: 'move_down' };
-    if (next[1] < y) return { bot: botId, action: 'move_up' };
-
-    return { bot: botId, action: 'wait' };
+    this.pathfinder = new Pathfinder();
   }
 
   decideBotActions(): BotAction[] {
@@ -91,6 +21,13 @@ export class BotStrategy {
     for (const bot of bots) {
       const action = this.decideAction(bot, state, dropOff);
       actions.push(action);
+
+      // Save bot state for next round (to detect stuck moves)
+      this.lastBotStates.set(bot.id, {
+        pos: [bot.position.x, bot.position.y],
+        action: action.action,
+        stuckCount: this.lastBotStates.get(bot.id)?.stuckCount || 0,
+      });
     }
 
     return actions;
@@ -98,6 +35,40 @@ export class BotStrategy {
 
   private decideAction(bot: any, state: any, dropOff: Coordinate): BotAction {
     const [x, y] = [bot.position.x, bot.position.y];
+
+    // Detect stuck moves and learn obstacles
+    let obstacleDiscovered = false;
+    const lastState = this.lastBotStates.get(bot.id);
+    if (lastState) {
+      const isSamePos = lastState.pos[0] === x && lastState.pos[1] === y;
+
+      if (isSamePos && lastState.action.startsWith('move_')) {
+        // We made a move but didn't change position - obstacle discovered!
+        lastState.stuckCount++;
+
+        // Determine what cell we tried to move to
+        let blockedX = x;
+        let blockedY = y;
+
+        if (lastState.action === 'move_up') blockedY = y - 1;
+        else if (lastState.action === 'move_down') blockedY = y + 1;
+        else if (lastState.action === 'move_left') blockedX = x - 1;
+        else if (lastState.action === 'move_right') blockedX = x + 1;
+
+        if (lastState.stuckCount >= 3) {
+          // Failed 3+ times, definitely blocked
+          this.pathfinder.blockCell(blockedX, blockedY);
+          if (state.round >= 290) {
+            console.log(`  [DEBUG Bot ${bot.id}] OBSTACLE LEARNED at (${blockedX},${blockedY}) after ${lastState.stuckCount} attempts`);
+          }
+          lastState.stuckCount = 0; // Reset for next obstacle
+          obstacleDiscovered = true;
+        }
+      } else if (!isSamePos) {
+        // Movement succeeded, reset stuck counter
+        lastState.stuckCount = 0;
+      }
+    }
 
     // Find active order first to check item matching
     const activeOrder = state.orders.find((o: any) => o.status === 'active');
@@ -121,14 +92,14 @@ export class BotStrategy {
 
     // If inventory full (3 items), go to drop-off
     if (bot.inventory.length >= 3) {
-      return this.moveTowardWithPath(bot.id, [x, y], [dropOff.x, dropOff.y], state.gridWidth, state.gridHeight, state.bots);
+      return this.pathfinder.moveTowardWithPath(bot.id, [x, y], [dropOff.x, dropOff.y], state.gridWidth, state.gridHeight, state.bots);
     }
 
     // Active order was already found above, check if it exists
     if (!activeOrder) {
       // No orders, wait or go drop off if holding anything
       if (bot.inventory.length > 0) {
-        return this.moveTowardWithPath(bot.id, [x, y], [dropOff.x, dropOff.y], state.gridWidth, state.gridHeight, state.bots);
+        return this.pathfinder.moveTowardWithPath(bot.id, [x, y], [dropOff.x, dropOff.y], state.gridWidth, state.gridHeight, state.bots);
       }
       return { bot: bot.id, action: 'wait' };
     }
@@ -184,7 +155,7 @@ export class BotStrategy {
       if (state.round >= 10) {
         console.log(`  [DEBUG Bot ${bot.id}] JUNK DETECTED! Inventory: [${bot.inventory.join(', ')}] | Order items_required: [${activeOrder.items_required.join(', ')}] | Junk: [${junkItems.join(', ')}]`);
       }
-      return this.moveTowardWithPath(bot.id, [x, y], [dropOff.x, dropOff.y], state.gridWidth, state.gridHeight, state.bots);
+      return this.pathfinder.moveTowardWithPath(bot.id, [x, y], [dropOff.x, dropOff.y], state.gridWidth, state.gridHeight, state.bots);
     }
 
     // Debug: if at (9,7) and not moving to drop-off, show why
@@ -215,7 +186,7 @@ export class BotStrategy {
       }
 
       // Use pathfinding to navigate around obstacles
-      return this.moveTowardWithPath(bot.id, [x, y], target, state.gridWidth, state.gridHeight, state.bots);
+      return this.pathfinder.moveTowardWithPath(bot.id, [x, y], target, state.gridWidth, state.gridHeight, state.bots);
     }
 
     // If holding items but no more needed, go deliver
@@ -223,7 +194,7 @@ export class BotStrategy {
       if (state.round <= 5 || state.round >= 20) {
         console.log(`  [DEBUG Bot ${bot.id}] Has [${bot.inventory.join(', ')}] but needed empty - GOING TO DROPOFF (${dropOff.x}, ${dropOff.y})`);
       }
-      return this.moveTowardWithPath(bot.id, [x, y], [dropOff.x, dropOff.y], state.gridWidth, state.gridHeight, state.bots);
+      return this.pathfinder.moveTowardWithPath(bot.id, [x, y], [dropOff.x, dropOff.y], state.gridWidth, state.gridHeight, state.bots);
     }
 
     // No items found
