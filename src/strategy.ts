@@ -1,16 +1,36 @@
 import { BotAction, Coordinate } from './types';
 import { GameStateManager } from './gameState';
 import { Pathfinder } from './pathfinding';
+import { BotOrchestrator } from './orchestrator';
 
 export class BotStrategy {
   private gameState: GameStateManager;
-  private pathfinder: Pathfinder;
+  private orchestrator: BotOrchestrator;
+  private pathfinders: Map<number, Pathfinder> = new Map(); // One pathfinder per bot
   private lastBotStates: Map<number, { pos: [number, number], action: string, stuckCount: number }> = new Map();
   private lastOrderId: string | undefined;
+  private assignedTargets: Map<number, string | null> = new Map(); // Current round's assigned targets
 
   constructor(gameState: GameStateManager) {
     this.gameState = gameState;
-    this.pathfinder = new Pathfinder();
+    this.orchestrator = new BotOrchestrator();
+  }
+
+  private getPathfinder(botId: number): Pathfinder {
+    if (!this.pathfinders.has(botId)) {
+      this.pathfinders.set(botId, new Pathfinder());
+    }
+    return this.pathfinders.get(botId)!;
+  }
+
+  /**
+   * Get zone for a position. Divides grid into 2x2 zones to reduce bot contention.
+   * Works for grids 8x8 and up
+   */
+  private getZone(pos: [number, number], gridWidth: number, gridHeight: number): string {
+    const zoneX = pos[0] < gridWidth / 2 ? 0 : 1;
+    const zoneY = pos[1] < gridHeight / 2 ? 0 : 1;
+    return `${zoneX},${zoneY}`;
   }
 
   decideBotActions(): BotAction[] {
@@ -18,6 +38,28 @@ export class BotStrategy {
     const bots = this.gameState.getBots();
     const state = this.gameState.getState();
     const dropOff = this.gameState.getDropOff();
+
+    // Find active order
+    const activeOrder = state.orders.find((o: any) => o.status === 'active');
+
+    // Calculate items still needed
+    const neededItemsMap = new Map();
+    if (activeOrder) {
+      const needed = [...activeOrder.items_required];
+      for (const delivered of activeOrder.items_delivered) {
+        const idx = needed.indexOf(delivered);
+        if (idx > -1) {
+          needed.splice(idx, 1);
+        }
+      }
+
+      // Build map of needed items
+      for (const item of state.items.values()) {
+        if (needed.includes(item.type)) {
+          neededItemsMap.set(item.id, item);
+        }
+      }
+    }
 
     for (const bot of bots) {
       const action = this.decideAction(bot, state, dropOff);
@@ -43,10 +85,10 @@ export class BotStrategy {
     // Clear blocked cells when order changes (new items on map)
     const currentOrderId = activeOrder?.id;
     if (!this.lastOrderId || this.lastOrderId !== currentOrderId) {
-      this.pathfinder.clearBlockedCells();
+      this.getPathfinder(bot.id).clearBlockedCells();
       this.lastOrderId = currentOrderId;
       if (state.round >= 10) {
-        console.log(`  [DEBUG] Order changed to ${currentOrderId} - cleared blocked cells`);
+        console.log(`  [DEBUG] Order changed to ${currentOrderId} - cleared blocked cells for Bot ${bot.id}`);
       }
     }
 
@@ -71,7 +113,7 @@ export class BotStrategy {
 
         if (lastState.stuckCount >= 3) {
           // Failed 3+ times, definitely blocked
-          this.pathfinder.blockCell(blockedX, blockedY);
+          this.getPathfinder(bot.id).blockCell(blockedX, blockedY);
           if (state.round >= 290) {
             console.log(`  [DEBUG Bot ${bot.id}] OBSTACLE LEARNED at (${blockedX},${blockedY}) after ${lastState.stuckCount} attempts`);
           }
@@ -103,14 +145,14 @@ export class BotStrategy {
 
     // If inventory full (3 items), go to drop-off
     if (bot.inventory.length >= 3) {
-      return this.pathfinder.moveTowardWithPath(bot.id, [x, y], [dropOff.x, dropOff.y], state.gridWidth, state.gridHeight, state.bots);
+      return this.getPathfinder(bot.id).moveTowardWithPath(bot.id, [x, y], [dropOff.x, dropOff.y], state.gridWidth, state.gridHeight, state.bots);
     }
 
     // Active order was already found above, check if it exists
     if (!activeOrder) {
       // No orders, wait or go drop off if holding anything
       if (bot.inventory.length > 0) {
-        return this.pathfinder.moveTowardWithPath(bot.id, [x, y], [dropOff.x, dropOff.y], state.gridWidth, state.gridHeight, state.bots);
+        return this.getPathfinder(bot.id).moveTowardWithPath(bot.id, [x, y], [dropOff.x, dropOff.y], state.gridWidth, state.gridHeight, state.bots);
       }
       return { bot: bot.id, action: 'wait' };
     }
@@ -143,6 +185,7 @@ export class BotStrategy {
     }
 
     // Try to pick up adjacent items first (even if carrying junk)
+    // Greedy: grab ANY adjacent needed item, not just assigned target
     for (const item of state.items.values()) {
       if (needed.includes(item.type)) {
         const [ix, iy] = item.position;
@@ -166,7 +209,7 @@ export class BotStrategy {
       if (state.round >= 10) {
         console.log(`  [DEBUG Bot ${bot.id}] JUNK DETECTED! Inventory: [${bot.inventory.join(', ')}] | Order items_required: [${activeOrder.items_required.join(', ')}] | Junk: [${junkItems.join(', ')}]`);
       }
-      return this.pathfinder.moveTowardWithPath(bot.id, [x, y], [dropOff.x, dropOff.y], state.gridWidth, state.gridHeight, state.bots);
+      return this.getPathfinder(bot.id).moveTowardWithPath(bot.id, [x, y], [dropOff.x, dropOff.y], state.gridWidth, state.gridHeight, state.bots);
     }
 
     // Debug: if at (9,7) and not moving to drop-off, show why
@@ -174,30 +217,43 @@ export class BotStrategy {
       console.log(`  [DEBUG Bot ${bot.id}] AT (9,7): inventory=[${bot.inventory}] | items_required=[${activeOrder.items_required}] | junkItems=[${junkItems}] | needed=[${needed}]`);
     }
 
-    // Move toward nearest needed item
-    let nearestItem = null;
+    // Move toward nearest needed item, prioritizing bot's zone (light bias)
+    const botZone = this.getZone([x, y], state.gridWidth, state.gridHeight);
+    let nearest = null;
     let nearestDist = Infinity;
+    let nearestInZone = null;
+    let nearestInZoneDist = Infinity;
 
     for (const item of state.items.values()) {
       if (needed.includes(item.type)) {
-        const [ix, iy] = item.position;
-        const dist = Math.abs(ix - x) + Math.abs(iy - y);
+        const dist = Math.abs(item.position[0] - x) + Math.abs(item.position[1] - y);
+        const itemZone = this.getZone(item.position as [number, number], state.gridWidth, state.gridHeight);
+
+        // Track nearest item in bot's zone
+        if (itemZone === botZone && dist < nearestInZoneDist) {
+          nearestInZoneDist = dist;
+          nearestInZone = item;
+        }
+
+        // Track nearest item overall
         if (dist < nearestDist) {
           nearestDist = dist;
-          nearestItem = item;
+          nearest = item;
         }
       }
     }
 
-    if (nearestItem) {
-      const target: [number, number] = [nearestItem.position[0], nearestItem.position[1]];
+    // Prefer item in bot's zone only if it's strictly closer
+    if (nearestInZone && nearestInZoneDist < nearestDist) {
+      nearest = nearestInZone;
+    }
 
-      if (state.round <= 5 || state.round >= 20) {
-        console.log(`  [DEBUG Bot ${bot.id}] Needed [${needed.join(', ')}] | Moving toward "${nearestItem.type}" at (${target[0]}, ${target[1]}) (dist: ${nearestDist})`);
+    // If found a needed item, go get it
+    if (nearest) {
+      if (state.round >= 200) {
+        console.log(`  [DEBUG Bot ${bot.id}] Moving to needed item "${nearest.type}" at (${nearest.position[0]}, ${nearest.position[1]})`);
       }
-
-      // Use pathfinding to navigate around obstacles
-      return this.pathfinder.moveTowardWithPath(bot.id, [x, y], target, state.gridWidth, state.gridHeight, state.bots);
+      return this.getPathfinder(bot.id).moveTowardWithPath(bot.id, [x, y], nearest.position as [number, number], state.gridWidth, state.gridHeight, state.bots);
     }
 
     // If holding items but no more needed, go deliver
@@ -205,7 +261,7 @@ export class BotStrategy {
       if (state.round <= 5 || state.round >= 20) {
         console.log(`  [DEBUG Bot ${bot.id}] Has [${bot.inventory.join(', ')}] but needed empty - GOING TO DROPOFF (${dropOff.x}, ${dropOff.y})`);
       }
-      return this.pathfinder.moveTowardWithPath(bot.id, [x, y], [dropOff.x, dropOff.y], state.gridWidth, state.gridHeight, state.bots);
+      return this.getPathfinder(bot.id).moveTowardWithPath(bot.id, [x, y], [dropOff.x, dropOff.y], state.gridWidth, state.gridHeight, state.bots);
     }
 
     // No items found
@@ -213,20 +269,10 @@ export class BotStrategy {
       console.log(`  [DEBUG Bot ${bot.id}] WARNING: Needed [${needed.join(', ')}] but no items available!`);
     }
 
-    // Nothing to do
-    return { bot: bot.id, action: 'wait' };
-  }
-
-  private moveToward(botId: number, x: number, y: number, target: Coordinate): BotAction {
-    const tx = target.x;
-    const ty = target.y;
-
-    // Prioritize X movement (move_left/move_right), then Y movement (move_up/move_down)
-    if (tx !== x) {
-      return { bot: botId, action: tx > x ? 'move_right' : 'move_left' };
-    } else if (ty !== y) {
-      return { bot: botId, action: ty > y ? 'move_down' : 'move_up' };
+    // Nothing to do - log more detail when stuck
+    if (state.round >= 250) {
+      console.log(`  [DEBUG Bot ${bot.id}] WAIT_ACTION at (${x},${y}): inventory=[${bot.inventory}] | junk=[${junkItems}] | needed=[${needed}] | activeOrder=${activeOrder?.id}`);
     }
-    return { bot: botId, action: 'wait' };
+    return { bot: bot.id, action: 'wait' };
   }
 }
