@@ -6,6 +6,7 @@ export class BotStrategy {
   private gameState: GameStateManager;
   private pathfinder: Pathfinder;
   private lastBotStates: Map<number, { pos: [number, number], action: string, stuckCount: number }> = new Map();
+  private lastOrderId: string | undefined;
 
   constructor(gameState: GameStateManager) {
     this.gameState = gameState;
@@ -35,6 +36,19 @@ export class BotStrategy {
 
   private decideAction(bot: any, state: any, dropOff: Coordinate): BotAction {
     const [x, y] = [bot.position.x, bot.position.y];
+
+    // Find active order first
+    const activeOrder = state.orders.find((o: any) => o.status === 'active');
+
+    // Clear blocked cells when order changes (new items on map)
+    const currentOrderId = activeOrder?.id;
+    if (!this.lastOrderId || this.lastOrderId !== currentOrderId) {
+      this.pathfinder.clearBlockedCells();
+      this.lastOrderId = currentOrderId;
+      if (state.round >= 10) {
+        console.log(`  [DEBUG] Order changed to ${currentOrderId} - cleared blocked cells`);
+      }
+    }
 
     // Detect stuck moves and learn obstacles
     let obstacleDiscovered = false;
@@ -69,9 +83,6 @@ export class BotStrategy {
         lastState.stuckCount = 0;
       }
     }
-
-    // Find active order first to check item matching
-    const activeOrder = state.orders.find((o: any) => o.status === 'active');
 
     // If at drop-off with items, check if they match the active order before dropping
     if (bot.inventory.length > 0 && x === dropOff.x && y === dropOff.y) {
