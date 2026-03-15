@@ -245,12 +245,21 @@ export class BotStrategy {
         const itemsNeeded = [...activeOrder.items_required];
         const hasMatchingItem = bot.inventory.some((item: string) => itemsNeeded.includes(item));
         if (hasMatchingItem) {
+          if (state.round < 150) {
+            console.log(`    [DROP-OFF] Bot ${bot.id} at dropoff (${x},${y}) with inv=[${bot.inventory}], items_needed=${itemsNeeded.length}, items_delivered=${activeOrder.items_delivered.length}`);
+          }
           return { bot: bot.id, action: 'drop_off' };
         }
         // If we're holding items that don't match, no point dropping them here
+        if (state.round < 150) {
+          console.log(`    [NO-MATCH] Bot ${bot.id} at dropoff (${x},${y}) but inv=[${bot.inventory}] doesn't match items_needed=[${itemsNeeded}]`);
+        }
         // Fall through to other logic to use/move
       } else {
         // No active order, just drop everything
+        if (state.round < 150) {
+          console.log(`    [DROP-OFF-NO-ORDER] Bot ${bot.id} at dropoff with inv=[${bot.inventory}]`);
+        }
         return { bot: bot.id, action: 'drop_off' };
       }
     }
