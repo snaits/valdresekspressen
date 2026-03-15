@@ -141,9 +141,6 @@ export class BotStrategy {
       }
 
       this.lastOrderId = currentOrderId;
-      if (state.round >= 0) {  // Always log
-        console.log(`  [WALLS] Order changed to ${currentOrderId} - cleared blocked cells and blocked ${state.walls.length} walls for Bot ${bot.id}`);
-      }
     }
 
     // Detect stuck moves and learn obstacles
@@ -157,10 +154,6 @@ export class BotStrategy {
         // We made a move but didn't change position - obstacle discovered!
         lastState.stuckCount++;
 
-        if (lastState.stuckCount === 1 || lastState.stuckCount === 2) {
-          console.log(`    [STUCK-COUNT] stuckCount=${lastState.stuckCount}: at (${x},${y}) after failed ${lastState.action}, inv=[${bot.inventory.join(', ')}]`);
-        }
-
         // Determine what cell we tried to move to
         let blockedX = x;
         let blockedY = y;
@@ -173,15 +166,11 @@ export class BotStrategy {
         if (lastState.stuckCount >= 2) {
           // Stuck for 2+ attempts - try fallback movement to escape
           isStuck = true;
-          console.log(`  [STUCK-DETECT] Round ${state.round}: Bot ${bot.id} stuck at (${x},${y}) after ${lastState.stuckCount} failed ${lastState.action}s, inv=[${bot.inventory.join(', ')}]`);
         }
 
         if (lastState.stuckCount >= 3) {
           // Failed 3+ times, definitely blocked - mark for pathfinder to learn
           this.getPathfinder(bot.id).blockCell(blockedX, blockedY);
-          if (state.round >= 290) {
-            console.log(`  [DEBUG Bot ${bot.id}] OBSTACLE LEARNED at (${blockedX},${blockedY}) after ${lastState.stuckCount} attempts`);
-          }
           lastState.stuckCount = 0; // Reset for next obstacle
           obstacleDiscovered = true;
         }
@@ -189,19 +178,13 @@ export class BotStrategy {
         // Movement succeeded
         // BUT: Don't reset stuck counter if holding items - we need to stay in delivery mode!
         if (bot.inventory.length === 0) {
-          if (lastState.stuckCount > 0) {
-            console.log(`    [STUCK-RESET] stuckCount reset (was ${lastState.stuckCount}) after successful move to (${x},${y})`);
-          }
           lastState.stuckCount = 0;
-        } else {
-          console.log(`    [STUCK-CONTINUING] stuckCount kept at ${lastState.stuckCount} (still holding items) after move to (${x},${y})`);
         }
       }
     }
 
     // If stuck with items, try to deliver them via pathfinding
     if (isStuck && bot.inventory.length > 0) {
-      console.log(`  [STUCK-DROPOFF] Round ${state.round}: Bot ${bot.id} stuck with [${bot.inventory.join(', ')}] at (${x},${y}) - PATHFINDING TO DROPOFF`);
       return this.getPathfinder(bot.id).moveTowardWithPath(bot.id, [x, y], [dropOff.x, dropOff.y], state.gridWidth, state.gridHeight, state.bots);
     }
 
@@ -235,32 +218,19 @@ export class BotStrategy {
 
       // Try pathfinding to each item - skip unreachable ones
       for (const { item: candidateItem } of stuckCandidates) {
-        if (state.round <= 10) {
-          console.log(`  [DEBUG Bot ${bot.id}] Stuck: trying pathfinding to "${candidateItem.type}" at (${candidateItem.position[0]}, ${candidateItem.position[1]})`);
-        }
-
         const moveAction = this.getPathfinder(bot.id).moveTowardWithPath(bot.id, [x, y], candidateItem.position as [number, number], state.gridWidth, state.gridHeight, state.bots);
 
         // If reachable, use it
         if (moveAction.action !== 'wait') {
-          if (state.round <= 10) {
-            console.log(`  [DEBUG Bot ${bot.id}] Stuck: found reachable item "${candidateItem.type}", moving`);
-          }
           return moveAction;
         }
 
         // If unreachable, skip and try next
-        if (state.round <= 10) {
-          console.log(`  [DEBUG Bot ${bot.id}] Stuck: skipping unreachable item "${candidateItem.type}", trying next...`);
-        }
       }
 
       // If no reachable items found, use fallback movement to escape the immediate area
       if (stuckCandidates.length > 0) {
         const nearestNeededItem = stuckCandidates[0].item;
-        if (state.round <= 10) {
-          console.log(`  [DEBUG Bot ${bot.id}] Stuck: no reachable items, fallback toward "${nearestNeededItem.type}" at (${nearestNeededItem.position[0]}, ${nearestNeededItem.position[1]})`);
-        }
         return this.fallbackMovement(bot.id, x, y, nearestNeededItem.position[0], nearestNeededItem.position[1], state.round);
       }
     }
@@ -332,9 +302,6 @@ export class BotStrategy {
 
         // If adjacent or at location, pick up
         if (dist <= 1) {
-          if (state.round <= 2) {
-            console.log(`  [Bot ${bot.id}] Picking up "${item.type}" at (${ix}, ${iy}) - dist: ${dist}`);
-          }
           return { bot: bot.id, action: 'pick_up', item_id: item.id };
         }
       }
@@ -345,15 +312,7 @@ export class BotStrategy {
 
     // If carrying junk and there are still items to pick AND not at drop-off, go drop junk first
     if (junkItems.length > 0 && !(x === dropOff.x && y === dropOff.y) && needed.length > 0) {
-      if (state.round >= 10) {
-        console.log(`  [DEBUG Bot ${bot.id}] JUNK DETECTED! Inventory: [${bot.inventory.join(', ')}] | Order items_required: [${activeOrder.items_required.join(', ')}] | Junk: [${junkItems.join(', ')}]`);
-      }
       return this.getPathfinder(bot.id).moveTowardWithPath(bot.id, [x, y], [dropOff.x, dropOff.y], state.gridWidth, state.gridHeight, state.bots);
-    }
-
-    // Debug: if at (9,7) and not moving to drop-off, show why
-    if (x === 9 && y === 7 && state.round >= 290) {
-      console.log(`  [DEBUG Bot ${bot.id}] AT (9,7): inventory=[${bot.inventory}] | items_required=[${activeOrder.items_required}] | junkItems=[${junkItems}] | needed=[${needed}]`);
     }
 
     // Build list of all needed items sorted by distance
@@ -374,18 +333,11 @@ export class BotStrategy {
 
     // Try items in distance order until we find a reachable one
     for (const { item: targetItem } of candidateItems) {
-      if (state.round >= 200) {
-        console.log(`  [DEBUG Bot ${bot.id}] Trying needed item "${targetItem.type}" at (${targetItem.position[0]}, ${targetItem.position[1]})`);
-      }
-
       // Try to pathfind to this item
       const moveAction = this.getPathfinder(bot.id).moveTowardWithPath(bot.id, [x, y], targetItem.position as [number, number], state.gridWidth, state.gridHeight, state.bots);
 
       // If unreachable AND holding items, drop off first then retry
       if (moveAction.action === 'wait' && bot.inventory.length > 0) {
-        if (true) {  // Always log
-          console.log(`  [UNREACHABLE] Bot ${bot.id} can't reach item at (${targetItem.position[0]}, ${targetItem.position[1]}), going to dropoff first with [${bot.inventory.join(', ')}]`);
-        }
         return this.getPathfinder(bot.id).moveTowardWithPath(bot.id, [x, y], [dropOff.x, dropOff.y], state.gridWidth, state.gridHeight, state.bots);
       }
 
@@ -396,30 +348,16 @@ export class BotStrategy {
 
       // If unreachable and empty inventory, skip this item and try next
       if (moveAction.action === 'wait' && bot.inventory.length === 0) {
-        if (state.round >= 150) {
-          console.log(`  [SKIP-UNREACHABLE] Bot ${bot.id} skipping unreachable item "${targetItem.type}" at (${targetItem.position[0]}, ${targetItem.position[1]}), trying next...`);
-        }
         continue;
       }
     }
 
     // If holding items but no more needed, go deliver
     if (bot.inventory.length > 0) {
-      if (state.round <= 5 || state.round >= 20) {
-        console.log(`  [DEBUG Bot ${bot.id}] Has [${bot.inventory.join(', ')}] but needed empty - GOING TO DROPOFF (${dropOff.x}, ${dropOff.y})`);
-      }
       return this.getPathfinder(bot.id).moveTowardWithPath(bot.id, [x, y], [dropOff.x, dropOff.y], state.gridWidth, state.gridHeight, state.bots);
     }
 
-    // No items found
-    if ((state.round <= 5 || state.round >= 20) && needed.length > 0) {
-      console.log(`  [DEBUG Bot ${bot.id}] WARNING: Needed [${needed.join(', ')}] but no items available!`);
-    }
-
-    // Nothing to do - log more detail when stuck
-    if (state.round >= 250) {
-      console.log(`  [DEBUG Bot ${bot.id}] WAIT_ACTION at (${x},${y}): inventory=[${bot.inventory}] | junk=[${junkItems}] | needed=[${needed}] | activeOrder=${activeOrder?.id}`);
-    }
+    // No items found - wait
     return { bot: bot.id, action: 'wait' };
   }
 }
