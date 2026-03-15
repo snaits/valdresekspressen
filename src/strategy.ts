@@ -7,7 +7,7 @@ export class BotStrategy {
   private gameState: GameStateManager;
   private orchestrator: BotOrchestrator;
   private pathfinders: Map<number, Pathfinder> = new Map(); // One pathfinder per bot
-  private lastBotStates: Map<number, { pos: [number, number], action: string, stuckCount: number, dropoffFailCount?: number, lastInventorySize?: number, failedDropoffInventorySize?: number, lastOrderIdSeen?: string }> = new Map();
+  private lastBotStates: Map<number, { pos: [number, number], action: string, stuckCount: number, dropoffFailCount?: number, lastInventorySize?: number, failedDropoffInventorySize?: number, failedDropoffSinceRound?: number, lastOrderIdSeen?: string }> = new Map();
   private lastOrderId: string | undefined;
   private assignedTargets: Map<number, BotAssignment> = new Map(); // Current round's assigned targets
 
@@ -114,6 +114,7 @@ export class BotStrategy {
         // CRITICAL: Preserve failedDropoffInventorySize so it persists across rounds
         // decideAction modifies lastState directly, and prevState points to the same object
         failedDropoffInventorySize: prevState?.failedDropoffInventorySize,
+        failedDropoffSinceRound: prevState?.failedDropoffSinceRound,
       });
     }
 
@@ -134,6 +135,7 @@ export class BotStrategy {
       // Order changed! Clear the rejected-inventory flag so bot can try the new order
       if (lastState.failedDropoffInventorySize !== undefined) {
         lastState.failedDropoffInventorySize = undefined;
+        lastState.failedDropoffSinceRound = undefined;
       }
       // Order changed! Any inventory not matching the NEW order is now junk
       if (activeOrder) {
@@ -290,14 +292,16 @@ export class BotStrategy {
 
         if (samePos && lastWasDropoff && inventorySameSize) {
           // Drop attempt failed - inventory unchanged
-          // Mark this inventory size as "failed at dropoff"
+          // Mark this inventory size as "failed at dropoff" with expiry timer
           lastState.failedDropoffInventorySize = bot.inventory.length;
+          lastState.failedDropoffSinceRound = state.round; // Start retry timer
           if (state.round < 150) {
             console.log(`    [DROP-OFF-FAILED-FIRST] Bot ${bot.id} drop_off attempt rejected. Moving away and won't retry with this inventory.`);
           }
         } else if (bot.inventory.length !== (lastState.failedDropoffInventorySize || -1)) {
           // Inventory changed - clear the failed marker so bot can try dropping again if needed
           lastState.failedDropoffInventorySize = undefined;
+          lastState.failedDropoffSinceRound = undefined;
         }
 
         // Track inventory for next round
@@ -305,8 +309,11 @@ export class BotStrategy {
       }
 
       // If THIS inventory was already tried at dropoff and rejected, GIVE UP and move away
-      // User request: "only if it has tried to dropoff and it wasnt accepted. immediately go away from dropoff and let someone else try"
-      if (lastState?.failedDropoffInventorySize === bot.inventory.length) {
+      // But expire after 15 rounds to allow retry (sequence position may have advanced)
+      const roundsSinceFailed = lastState?.failedDropoffSinceRound !== undefined
+        ? state.round - lastState.failedDropoffSinceRound
+        : Infinity;
+      if (lastState?.failedDropoffInventorySize === bot.inventory.length && roundsSinceFailed < 15) {
         if (state.round < 150) {
           console.log(`    [COMMITTED-ABANDON] Bot ${bot.id} moving away - this inventory was already rejected at dropoff.`);
         }
@@ -317,6 +324,10 @@ export class BotStrategy {
         if (y - 1 >= 0) return { bot: bot.id, action: 'move_up' };
         // If can't move away, just wait
         return { bot: bot.id, action: 'wait' };
+      } else if (roundsSinceFailed >= 15 && lastState?.failedDropoffInventorySize !== undefined) {
+        // Retry timeout expired - clear the flag and fall through to try drop_off again
+        lastState.failedDropoffInventorySize = undefined;
+        lastState.failedDropoffSinceRound = undefined;
       }
 
       // SECOND: Check inventory sequence (but don't return - just note it)
@@ -380,10 +391,14 @@ export class BotStrategy {
     }
 
     // CRITICAL: If this inventory was already rejected at dropoff, don't route back there.
-    // The bot can't help the current order - move away and idle to clear space for other bots.
+    // Expires after 15 rounds so bots can retry once the sequence position may have advanced.
+    const rejectedRounds = lastState?.failedDropoffSinceRound !== undefined
+      ? state.round - lastState.failedDropoffSinceRound
+      : Infinity;
     const inventoryRejected = lastState?.failedDropoffInventorySize !== undefined &&
       lastState.failedDropoffInventorySize === bot.inventory.length &&
-      bot.inventory.length > 0;
+      bot.inventory.length > 0 &&
+      rejectedRounds < 15;
 
     if (inventoryRejected) {
       if (state.round < 150) {
