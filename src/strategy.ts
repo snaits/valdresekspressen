@@ -132,10 +132,17 @@ export class BotStrategy {
     // Clear blocked cells when order changes (new items on map)
     const currentOrderId = activeOrder?.id;
     if (!this.lastOrderId || this.lastOrderId !== currentOrderId) {
-      this.getPathfinder(bot.id).clearBlockedCells();
+      const pathfinder = this.getPathfinder(bot.id);
+      pathfinder.clearBlockedCells();
+
+      // Block all walls from the server
+      for (const [wx, wy] of state.walls) {
+        pathfinder.blockCell(wx, wy);
+      }
+
       this.lastOrderId = currentOrderId;
       if (state.round >= 10) {
-        console.log(`  [DEBUG] Order changed to ${currentOrderId} - cleared blocked cells for Bot ${bot.id}`);
+        console.log(`  [DEBUG] Order changed to ${currentOrderId} - cleared blocked cells and blocked ${state.walls.length} walls for Bot ${bot.id}`);
       }
     }
 

@@ -2,7 +2,7 @@
 export interface ServerGameState {
   round: number;
   max_round: number;
-  grid: { width: number; height: number };
+  grid: { width: number; height: number; walls?: [number, number][] };
   bots: ServerBot[];
   items: ServerItem[];
   orders: ServerOrder[];
@@ -10,6 +10,7 @@ export interface ServerGameState {
   score: number;
   type?: string;
 }
+
 
 export interface ServerBot {
   id: number;
@@ -72,9 +73,11 @@ export interface GameState {
   maxRound: number;
   gridWidth: number;
   gridHeight: number;
+  walls: [number, number][];  // Wall positions from server
   bots: BotState[];
   items: Map<string, ServerItem>;
   orders: ServerOrder[];
   dropOff: Coordinate;
   score: number;
 }
+

@@ -6,6 +6,7 @@ export class GameStateManager {
     maxRound: 0,
     gridWidth: 0,
     gridHeight: 0,
+    walls: [],  // Will be populated from server
     bots: [],
     items: new Map(),
     orders: [],
@@ -18,6 +19,7 @@ export class GameStateManager {
     this.state.maxRound = serverState.max_round;
     this.state.gridWidth = serverState.grid.width;
     this.state.gridHeight = serverState.grid.height;
+    this.state.walls = serverState.grid.walls || [];  // Extract walls from grid
     this.state.dropOff = { x: serverState.drop_off[0], y: serverState.drop_off[1] };
     this.state.score = serverState.score;
 
