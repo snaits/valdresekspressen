@@ -295,8 +295,9 @@ describe('BotStrategy - Movement Logic', () => {
       gameState.updateFromServer(mockState);
       const actions = strategy.decideBotActions();
 
-      // Should wait (no more items needed), not pick for preview order
-      expect(actions[0].action).toBe('wait');
+      // Should move away from dropoff (empty bot at dropoff must not block other bots)
+      // Even when order is complete, bot should clear the dropoff zone
+      expect(['move_right', 'move_up', 'move_left', 'move_down']).toContain(actions[0].action);
     });
 
     it('should not drop_off items that dont match active order', () => {
@@ -918,8 +919,8 @@ describe('BotStrategy - Movement Logic', () => {
       gameState.updateFromServer(mockState);
       const actions = strategy.decideBotActions();
 
-      // Should wait (nothing to do)
-      expect(actions[0].action).toBe('wait');
+      // Should move away from dropoff (empty bot at dropoff must not block other bots)
+      expect(['move_right', 'move_up', 'move_left', 'move_down']).toContain(actions[0].action);
     });
 
     it('should pick up item at exact location (distance = 0)', () => {

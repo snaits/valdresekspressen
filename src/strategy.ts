@@ -270,6 +270,16 @@ export class BotStrategy {
     }
 
 
+
+    // CRITICAL: Empty bot at dropoff must move away immediately to unblock other bots
+    // Without this, an empty bot parks at the dropoff forever and prevents deliveries
+    if (bot.inventory.length === 0 && x === dropOff.x && y === dropOff.y) {
+      if (x + 1 < state.gridWidth) return { bot: bot.id, action: 'move_right' };
+      if (y - 1 >= 0) return { bot: bot.id, action: 'move_up' };
+      if (x - 1 >= 0) return { bot: bot.id, action: 'move_left' };
+      if (y + 1 < state.gridHeight) return { bot: bot.id, action: 'move_down' };
+    }
+
     if (bot.inventory.length > 0 && x === dropOff.x && y === dropOff.y) {
       // CRITICAL FIRST: Check if oscillation abandonment applies (happens before any other dropoff logic)
       // Detect if dropoff attempts are failing (inventory not clearing)
@@ -377,17 +387,16 @@ export class BotStrategy {
 
     if (inventoryRejected) {
       if (state.round < 150) {
-        console.log(`    [IDLE-ABANDON] Bot ${bot.id} has rejected inventory [${bot.inventory}] - idling away from dropoff.`);
+        console.log(`    [IDLE-ABANDON] Bot ${bot.id} has rejected inventory [${bot.inventory}] - parking away from dropoff.`);
       }
-      // Move away from dropoff if within range, otherwise stay put
+      // Navigate to far parking zone, staggered by bot id to spread bots out
+      const parkX = dropOff.x < state.gridWidth / 2 ? state.gridWidth - 2 : 1;
+      const parkY = Math.min(Math.max(bot.id * 2, 1), state.gridHeight - 2);
       const distToDropoff = Math.abs(x - dropOff.x) + Math.abs(y - dropOff.y);
-      if (distToDropoff <= 4) {
-        // Move in direction that increases distance from dropoff
-        if (x > dropOff.x && x + 1 < state.gridWidth) return { bot: bot.id, action: 'move_right' };
-        if (x < dropOff.x && x - 1 >= 0) return { bot: bot.id, action: 'move_left' };
-        if (y > dropOff.y && y + 1 < state.gridHeight) return { bot: bot.id, action: 'move_down' };
-        if (y < dropOff.y && y - 1 >= 0) return { bot: bot.id, action: 'move_up' };
-        // Same column/row as dropoff - try any valid direction
+      if (distToDropoff <= 5 || (x !== parkX || y !== parkY)) {
+        const moveAway = this.getPathfinder(bot.id).moveTowardWithPath(bot.id, [x, y], [parkX, parkY], state.gridWidth, state.gridHeight, state.bots);
+        if (moveAway.action !== 'wait') return moveAway;
+        // Pathfinding blocked - nudge in any valid direction
         if (x + 1 < state.gridWidth) return { bot: bot.id, action: 'move_right' };
         if (y - 1 >= 0) return { bot: bot.id, action: 'move_up' };
       }
@@ -402,12 +411,17 @@ export class BotStrategy {
         const hasAnyMatchingType = bot.inventory.some((item: string) => orderItemTypes.has(item));
 
         if (!hasAnyMatchingType) {
-          // Full inventory of pure junk - move AWAY from dropoff to free space
-          // This prevents bots from crowding dropoff with useless items
+          // Full inventory of pure junk - navigate to far parking zone away from dropoff
+          // Use pathfinding so bots don't bounce off walls
           if (state.round < 150) {
-            console.log(`    [FULL-JUNK] Bot ${bot.id} has FULL junk inventory. Moving AWAY to clear area.`);
+            console.log(`    [FULL-JUNK] Bot ${bot.id} has FULL junk inventory. Parking away from dropoff.`);
           }
-          // Try to move away: right, left, down, up
+          // Park at opposite corner from dropoff, stagger by bot id to spread bots out
+          const parkX = dropOff.x < state.gridWidth / 2 ? state.gridWidth - 2 : 1;
+          const parkY = Math.min(Math.max(bot.id * 2, 1), state.gridHeight - 2);
+          const moveAway = this.getPathfinder(bot.id).moveTowardWithPath(bot.id, [x, y], [parkX, parkY], state.gridWidth, state.gridHeight, state.bots);
+          if (moveAway.action !== 'wait') return moveAway;
+          // Pathfinding blocked - try any direction to get unstuck
           if (x + 1 < state.gridWidth) return { bot: bot.id, action: 'move_right' };
           if (x - 1 >= 0) return { bot: bot.id, action: 'move_left' };
           if (y + 1 < state.gridHeight) return { bot: bot.id, action: 'move_down' };
