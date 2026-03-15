@@ -111,6 +111,9 @@ export class BotStrategy {
         dropoffFailCount: prevState?.dropoffFailCount || 0,
         lastInventorySize: bot.inventory.length,
         lastOrderIdSeen: activeOrder?.id,
+        // CRITICAL: Preserve failedDropoffInventorySize so it persists across rounds
+        // decideAction modifies lastState directly, and prevState points to the same object
+        failedDropoffInventorySize: prevState?.failedDropoffInventorySize,
       });
     }
 
@@ -128,6 +131,10 @@ export class BotStrategy {
     // Old inventory from previous order should be treated as junk in new order
     const lastState = this.lastBotStates.get(bot.id);
     if (lastState && lastState.lastOrderIdSeen !== currentOrderId && lastState.lastOrderIdSeen !== undefined) {
+      // Order changed! Clear the rejected-inventory flag so bot can try the new order
+      if (lastState.failedDropoffInventorySize !== undefined) {
+        lastState.failedDropoffInventorySize = undefined;
+      }
       // Order changed! Any inventory not matching the NEW order is now junk
       if (activeOrder) {
         const oldInventoryNotInNewOrder = bot.inventory.filter((item: string) => !activeOrder.items_required.includes(item));
@@ -360,6 +367,31 @@ export class BotStrategy {
         }
         return { bot: bot.id, action: 'drop_off' };
       }
+    }
+
+    // CRITICAL: If this inventory was already rejected at dropoff, don't route back there.
+    // The bot can't help the current order - move away and idle to clear space for other bots.
+    const inventoryRejected = lastState?.failedDropoffInventorySize !== undefined &&
+      lastState.failedDropoffInventorySize === bot.inventory.length &&
+      bot.inventory.length > 0;
+
+    if (inventoryRejected) {
+      if (state.round < 150) {
+        console.log(`    [IDLE-ABANDON] Bot ${bot.id} has rejected inventory [${bot.inventory}] - idling away from dropoff.`);
+      }
+      // Move away from dropoff if within range, otherwise stay put
+      const distToDropoff = Math.abs(x - dropOff.x) + Math.abs(y - dropOff.y);
+      if (distToDropoff <= 4) {
+        // Move in direction that increases distance from dropoff
+        if (x > dropOff.x && x + 1 < state.gridWidth) return { bot: bot.id, action: 'move_right' };
+        if (x < dropOff.x && x - 1 >= 0) return { bot: bot.id, action: 'move_left' };
+        if (y > dropOff.y && y + 1 < state.gridHeight) return { bot: bot.id, action: 'move_down' };
+        if (y < dropOff.y && y - 1 >= 0) return { bot: bot.id, action: 'move_up' };
+        // Same column/row as dropoff - try any valid direction
+        if (x + 1 < state.gridWidth) return { bot: bot.id, action: 'move_right' };
+        if (y - 1 >= 0) return { bot: bot.id, action: 'move_up' };
+      }
+      return { bot: bot.id, action: 'wait' };
     }
 
     // If inventory full (3 items), need to drop off
