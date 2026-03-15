@@ -1436,6 +1436,93 @@ describe('BotStrategy - Movement Logic', () => {
       // Should NOT drop junk, will move away to collect needed items
       expect(actions[0].action).not.toBe('drop_off');
     });
+
+    it('should drop off duplicate items (e.g. [milk, milk] when order needs milk)', () => {
+      // Critical test: Bot with DUPLICATE items of same type
+      // This was the bug: Bot 2 stuck with [milk, milk] while trying to drop_off
+      const mockState: ServerGameState = {
+        round: 35,
+        max_round: 300,
+        grid: { width: 16, height: 12 },
+        drop_off: [1, 10],
+        bots: [
+          {
+            id: 2,
+            position: [1, 10], // AT drop-off
+            inventory: ['milk', 'milk'], // DUPLICATE items
+          },
+        ],
+        items: [
+          {
+            id: 'item_0',
+            type: 'eggs',
+            position: [5, 2],
+          },
+        ],
+        orders: [
+          {
+            id: 'order_0',
+            items_required: ['eggs', 'eggs', 'milk', 'milk', 'cheese'],
+            items_delivered: ['eggs'], // 1 egg already delivered
+            status: 'active',
+          },
+        ],
+        score: 4,
+      };
+
+      gameState.updateFromServer(mockState);
+      const actions = strategy.decideBotActions();
+
+      // Bot has [milk, milk], order needs more milk -> MUST drop
+      expect(actions[0].action).toBe('drop_off');
+      expect(actions[0].action).not.toBe('wait');
+    });
+
+    it('CRITICAL: server only delivers items matching order SEQUENCE', () => {
+      // SERVER RULE: items_required is ORDERED. Drop-off matches items IN SEQUENCE.
+      // If bot has [eggs, milk, milk] but order needs [eggs, eggs, milk, milk, cheese]:
+      // - eggs matches position 0 ✓ delivered
+      // - milk does NOT match position 1 (needs eggs) ✗ NOT delivered
+      // - milk does NOT match position 2 (position 1 not fulfilled) ✗ NOT delivered
+      // Result: only first item delivers, rest stay in inventory!
+
+      // This is a SERVER behavior test, but documents critical constraint:
+      // Bots MUST collect items in order, or multi-item drop-offs fail!
+      const mockState: ServerGameState = {
+        round: 35,
+        max_round: 300,
+        grid: { width: 16, height: 12 },
+        drop_off: [1, 10],
+        bots: [
+          {
+            id: 2,
+            position: [1, 10],
+            inventory: ['eggs', 'milk', 'milk'], // Out of order!
+          },
+        ],
+        items: [],
+        orders: [
+          {
+            id: 'order_0',
+            items_required: ['eggs', 'eggs', 'milk', 'milk', 'cheese'],
+            items_delivered: [], // Nothing delivered yet
+            status: 'active',
+          },
+        ],
+        score: 0,
+      };
+
+      gameState.updateFromServer(mockState);
+      const actions = strategy.decideBotActions();
+
+      // Bot WILL return drop_off action (it has matching items)
+      expect(actions[0].action).toBe('drop_off');
+
+      // BUT: Server will only deliver the FIRST eggs
+      // Milks stay because position 1 still needs another eggs
+      // THIS IS A SERVER-SIDE BEHAVIOR - not something our code can fix
+      // The real fix: ensure bots collect in order!
+    });
   });
 
   describe('Stuck Detection Threshold', () => {
