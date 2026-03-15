@@ -24,6 +24,39 @@ export class BotStrategy {
   }
 
   /**
+   * Fallback movement toward target when BFS pathfinding fails or when stuck.
+   * Alternates between X and Y directions to navigate around obstacles.
+   */
+  private fallbackMovement(
+    botId: number,
+    x: number,
+    y: number,
+    targetX: number,
+    targetY: number,
+    round: number
+  ): BotAction {
+    // Every 3 rounds, swap primary direction (X vs Y)
+    const swapEvery = 3;
+    const shouldPrioritizeY = Math.floor(round / swapEvery) % 2 === 1;
+
+    if (shouldPrioritizeY) {
+      // Try Y first, then X
+      if (y < targetY) return { bot: botId, action: 'move_down' };
+      if (y > targetY) return { bot: botId, action: 'move_up' };
+      if (x < targetX) return { bot: botId, action: 'move_right' };
+      if (x > targetX) return { bot: botId, action: 'move_left' };
+    } else {
+      // Try X first, then Y
+      if (x < targetX) return { bot: botId, action: 'move_right' };
+      if (x > targetX) return { bot: botId, action: 'move_left' };
+      if (y < targetY) return { bot: botId, action: 'move_down' };
+      if (y > targetY) return { bot: botId, action: 'move_up' };
+    }
+
+    return { bot: botId, action: 'wait' };
+  }
+
+  /**
    * Get zone for a position. Divides grid into 2x2 zones to reduce bot contention.
    * Works for grids 8x8 and up
    */
@@ -94,6 +127,7 @@ export class BotStrategy {
 
     // Detect stuck moves and learn obstacles
     let obstacleDiscovered = false;
+    let isStuck = false;
     const lastState = this.lastBotStates.get(bot.id);
     if (lastState) {
       const isSamePos = lastState.pos[0] === x && lastState.pos[1] === y;
@@ -111,8 +145,13 @@ export class BotStrategy {
         else if (lastState.action === 'move_left') blockedX = x - 1;
         else if (lastState.action === 'move_right') blockedX = x + 1;
 
+        if (lastState.stuckCount >= 2) {
+          // Stuck for 2+ attempts - try fallback movement to escape
+          isStuck = true;
+        }
+
         if (lastState.stuckCount >= 3) {
-          // Failed 3+ times, definitely blocked
+          // Failed 3+ times, definitely blocked - mark for pathfinder to learn
           this.getPathfinder(bot.id).blockCell(blockedX, blockedY);
           if (state.round >= 290) {
             console.log(`  [DEBUG Bot ${bot.id}] OBSTACLE LEARNED at (${blockedX},${blockedY}) after ${lastState.stuckCount} attempts`);
@@ -126,7 +165,48 @@ export class BotStrategy {
       }
     }
 
-    // If at drop-off with items, check if they match the active order before dropping
+    // If stuck with items, try to deliver them via fallback movement
+    if (isStuck && bot.inventory.length > 0) {
+      if (state.round <= 10) {
+        console.log(`  [DEBUG Bot ${bot.id}] Stuck with inventory, using fallback to dropoff`);
+      }
+      return this.fallbackMovement(bot.id, x, y, dropOff.x, dropOff.y, state.round);
+    }
+
+    // If stuck with no items, pick up ANY adjacent item or try fallback to nearest item
+    if (isStuck && bot.inventory.length === 0) {
+      // Try to pick up any adjacent item to make progress
+      for (const item of state.items.values()) {
+        const [ix, iy] = item.position;
+        const dist = Math.abs(ix - x) + Math.abs(iy - y);
+        if (dist <= 1) {
+          if (state.round <= 10) {
+            console.log(`  [DEBUG Bot ${bot.id}] Stuck picking up adjacent item to make progress`);
+          }
+          return { bot: bot.id, action: 'pick_up', item_id: item.id };
+        }
+      }
+
+      // No adjacent items - try fallback toward nearest item
+      let nearestItem: any = null;
+      let nearestDist = Infinity;
+      for (const item of state.items.values()) {
+        const dist = Math.abs(item.position[0] - x) + Math.abs(item.position[1] - y);
+        if (dist < nearestDist) {
+          nearestDist = dist;
+          nearestItem = item;
+        }
+      }
+
+      if (nearestItem) {
+        if (state.round <= 10) {
+          console.log(`  [DEBUG Bot ${bot.id}] Stuck using fallback toward item at (${nearestItem.position[0]}, ${nearestItem.position[1]})`);
+        }
+        return this.fallbackMovement(bot.id, x, y, nearestItem.position[0], nearestItem.position[1], state.round);
+      }
+    }
+
+
     if (bot.inventory.length > 0 && x === dropOff.x && y === dropOff.y) {
       if (activeOrder) {
         // Only drop if we have items that match the active order requirements

@@ -61,8 +61,12 @@ export class Pathfinder {
         // Check visited
         if (visited.has(key)) continue;
 
-        // Check if blocked (known obstacle or other bot)
-        if (this.blockedCells.has(key) || botPositions.has(key)) continue;
+        // Check if blocked (known obstacle)
+        if (this.blockedCells.has(key)) continue;
+
+        // Check if other bot - but allow if it's the target (for dropoff coordination)
+        const isBot = botPositions.has(key);
+        if (isBot && !(nx === target[0] && ny === target[1])) continue;
 
         // Found target!
         if (nx === target[0] && ny === target[1]) {
@@ -74,8 +78,7 @@ export class Pathfinder {
       }
     }
 
-    // No path found - mark target as unreachable
-    this.blockedCells.add(`${target[0]},${target[1]}`);
+    // No path found - return empty path
     return [];
   }
 
@@ -101,6 +104,15 @@ export class Pathfinder {
     // Move to next step in path
     const next = path[1];
     const [x, y] = start;
+
+    // Check if next cell is occupied by another bot - if so, wait (can't enter occupied cell)
+    const botPositions = new Set(
+      bots.filter(b => !(b.position.x === x && b.position.y === y))
+        .map(b => `${b.position.x},${b.position.y}`)
+    );
+    if (botPositions.has(`${next[0]},${next[1]}`)) {
+      return { bot: botId, action: 'wait' };
+    }
 
     if (next[0] > x) return { bot: botId, action: 'move_right' };
     if (next[0] < x) return { bot: botId, action: 'move_left' };

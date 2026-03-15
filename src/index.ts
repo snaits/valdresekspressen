@@ -75,7 +75,10 @@ async function handleGameState(serverState: ServerGameState): Promise<ClientActi
   if (state.round === 0) {
     console.log('\n📊 Round 0 State:');
     console.log(`  Grid: ${state.gridWidth}x${state.gridHeight}`);
-    console.log(`  Bot 0 inventory: ${state.bots[0]?.inventory || '[]'}`);
+    console.log(`  Total bots: ${state.bots.length}`);
+    for (const bot of state.bots) {
+      console.log(`    Bot ${bot.id} at (${bot.position.x}, ${bot.position.y}), inventory: [${bot.inventory.join(', ') || '(empty)'}]`);
+    }
     console.log(`  Drop-off at: (${state.dropOff.x}, ${state.dropOff.y})`);
     const activeOrders = gameState.getActiveOrders();
     if (activeOrders.length > 0) {
@@ -92,39 +95,17 @@ async function handleGameState(serverState: ServerGameState): Promise<ClientActi
 
   // Schedule logging for later (don't block response)
   setImmediate(() => {
-    // Debug: Show all orders each round between round 10-20
-    if (state.round > 10 && state.round < 20) {
-      console.log(`  Orders: ${JSON.stringify(state.orders.map(o => ({ id: o.id, status: o.status, needed: o.items_required.length - o.items_delivered.length })), null, 0)}`);
-    }
-
-    // Log bot actions
+    // Debug: Show all bot actions each round (not just Bot 0)
+    console.log(`  [Actions Round ${state.round}] ${actions.length} bots:`);
     for (const action of actions) {
       const bot = state.bots.find(b => b.id === action.bot);
       const invStr = bot?.inventory.length ? `inv: [${bot.inventory.join(', ')}]` : 'inv: []';
-      const activeOrders = gameState.getActiveOrders();
-      if (activeOrders.length > 0) {
-        const order = activeOrders[0];
-        // Calculate what's truly needed (items_required - items_delivered - items_in_inventory)
-        let needed = [...order.items_required];
-        for (const delivered of order.items_delivered) {
-          const idx = needed.indexOf(delivered);
-          if (idx > -1) needed.splice(idx, 1);
-        }
-        for (const carrying of bot?.inventory || []) {
-          const idx = needed.indexOf(carrying);
-          if (idx > -1) needed.splice(idx, 1);
-        }
-        const orderStr = `need [${needed.join(', ')}]`;
-        // Log all early rounds, plus rounds 20+ if stuck
-        if (state.round < 15 || state.round >= 20) {
-          console.log(`    Bot 0: ${action.action} | ${invStr} | ${orderStr}` + (action.item_id ? ` (${action.item_id})` : ''));
-          // Extra debug for rounds 20+: show all available items
-          if (state.round >= 20) {
-            const availableItems = Array.from(state.items.values()).map(i => `${i.type}@(${i.position[0]},${i.position[1]})`);
-            console.log(`      Available items: [${availableItems.join(', ')}]`);
-          }
-        }
-      }
+      console.log(`    Bot ${action.bot}: ${action.action} | ${invStr}`);
+    }
+
+    // Debug: Show all orders each round between round 10-20
+    if (state.round > 10 && state.round < 20) {
+      console.log(`  Orders: ${JSON.stringify(state.orders.map(o => ({ id: o.id, status: o.status, needed: o.items_required.length - o.items_delivered.length })), null, 0)}`);
     }
   });
 
