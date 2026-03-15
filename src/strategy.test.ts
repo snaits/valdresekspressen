@@ -1158,6 +1158,57 @@ describe('BotStrategy - Movement Logic', () => {
       expect(actions[0].item_id).toBe('item_0');
     });
 
+    it('should NOT pick up junk items when stuck with empty inventory', () => {
+      // Bot stuck at (5, 5), empty inventory, JUNK item adjacent but NEEDED items exist elsewhere
+      let mockState: ServerGameState = {
+        round: 0,
+        max_round: 300,
+        grid: { width: 12, height: 10 },
+        drop_off: [1, 8],
+        bots: [{ id: 0, position: [5, 5], inventory: [] }],
+        items: [
+          { id: 'item_junk', type: 'cheese', position: [5, 6] }, // JUNK - adjacent
+          { id: 'item_needed', type: 'butter', position: [2, 2] }, // NEEDED - far away
+        ],
+        orders: [
+          {
+            id: 'order_0',
+            items_required: ['butter', 'milk'],
+            items_delivered: [],
+            status: 'active',
+          },
+        ],
+        score: 0,
+      };
+
+      gameState.updateFromServer(mockState);
+      strategy.decideBotActions(); // Round 0
+
+      // Round 1: attempt to move but stuck (stuckCount = 1)
+      mockState = {
+        ...mockState,
+        round: 1,
+        bots: [{ id: 0, position: [5, 5], inventory: [] }],
+      };
+      gameState.updateFromServer(mockState);
+      strategy.decideBotActions();
+
+      // Round 2: stuck again (stuckCount = 2, should trigger stuck recovery)
+      mockState = {
+        ...mockState,
+        round: 2,
+        bots: [{ id: 0, position: [5, 5], inventory: [] }],
+      };
+      gameState.updateFromServer(mockState);
+      const actions = strategy.decideBotActions();
+
+      // Should NOT pick up junk cheese
+      // Should instead use fallback toward needed butter at (2,2)
+      expect(actions[0].action).not.toBe('pick_up');
+      const action = actions[0].action;
+      expect(['move_left', 'move_up', 'move_down']).toContain(action);
+    });
+
     it('should use fallback toward nearest item when stuck with no adjacent items', () => {
       // Bot stuck at (5, 5), empty inventory, only distant items
       let mockState: ServerGameState = {

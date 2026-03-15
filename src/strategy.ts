@@ -115,6 +115,20 @@ export class BotStrategy {
     // Find active order first
     const activeOrder = state.orders.find((o: any) => o.status === 'active');
 
+    // Calculate items still needed RIGHT HERE (before stuck detection)
+    // This is used throughout the function for stuck recovery and item selection
+    const itemsStillNeeded: string[] = [];
+    if (activeOrder) {
+      const itemsNeeded = [...activeOrder.items_required];
+      for (const delivered of activeOrder.items_delivered) {
+        const idx = itemsNeeded.indexOf(delivered);
+        if (idx > -1) {
+          itemsNeeded.splice(idx, 1);
+        }
+      }
+      itemsStillNeeded.push(...itemsNeeded);
+    }
+
     // Clear blocked cells when order changes (new items on map)
     const currentOrderId = activeOrder?.id;
     if (!this.lastOrderId || this.lastOrderId !== currentOrderId) {
@@ -173,36 +187,40 @@ export class BotStrategy {
       return this.fallbackMovement(bot.id, x, y, dropOff.x, dropOff.y, state.round);
     }
 
-    // If stuck with no items, pick up ANY adjacent item or try fallback to nearest item
-    if (isStuck && bot.inventory.length === 0) {
-      // Try to pick up any adjacent item to make progress
+    // If stuck with no items, pick up ONLY NEEDED ITEMS that are adjacent, or fallback toward nearest needed item
+    if (isStuck && bot.inventory.length === 0 && itemsStillNeeded.length > 0) {
+      // Try to pick up adjacent NEEDED item to make progress
       for (const item of state.items.values()) {
-        const [ix, iy] = item.position;
-        const dist = Math.abs(ix - x) + Math.abs(iy - y);
-        if (dist <= 1) {
-          if (state.round <= 10) {
-            console.log(`  [DEBUG Bot ${bot.id}] Stuck picking up adjacent item to make progress`);
+        if (itemsStillNeeded.includes(item.type)) { // ONLY NEEDED ITEMS
+          const [ix, iy] = item.position;
+          const dist = Math.abs(ix - x) + Math.abs(iy - y);
+          if (dist <= 1) {
+            if (state.round <= 10) {
+              console.log(`  [DEBUG Bot ${bot.id}] Stuck picking up adjacent NEEDED item "${item.type}" to make progress`);
+            }
+            return { bot: bot.id, action: 'pick_up', item_id: item.id };
           }
-          return { bot: bot.id, action: 'pick_up', item_id: item.id };
         }
       }
 
-      // No adjacent items - try fallback toward nearest item
-      let nearestItem: any = null;
+      // No adjacent needed items - try fallback toward NEAREST NEEDED ITEM
+      let nearestNeededItem: any = null;
       let nearestDist = Infinity;
       for (const item of state.items.values()) {
-        const dist = Math.abs(item.position[0] - x) + Math.abs(item.position[1] - y);
-        if (dist < nearestDist) {
-          nearestDist = dist;
-          nearestItem = item;
+        if (itemsStillNeeded.includes(item.type)) { // ONLY NEEDED ITEMS
+          const dist = Math.abs(item.position[0] - x) + Math.abs(item.position[1] - y);
+          if (dist < nearestDist) {
+            nearestDist = dist;
+            nearestNeededItem = item;
+          }
         }
       }
 
-      if (nearestItem) {
+      if (nearestNeededItem) {
         if (state.round <= 10) {
-          console.log(`  [DEBUG Bot ${bot.id}] Stuck using fallback toward item at (${nearestItem.position[0]}, ${nearestItem.position[1]})`);
+          console.log(`  [DEBUG Bot ${bot.id}] Stuck using fallback toward NEEDED item "${nearestNeededItem.type}" at (${nearestNeededItem.position[0]}, ${nearestNeededItem.position[1]})`);
         }
-        return this.fallbackMovement(bot.id, x, y, nearestItem.position[0], nearestItem.position[1], state.round);
+        return this.fallbackMovement(bot.id, x, y, nearestNeededItem.position[0], nearestNeededItem.position[1], state.round);
       }
     }
 
