@@ -333,55 +333,51 @@ export class BotStrategy {
       console.log(`  [DEBUG Bot ${bot.id}] AT (9,7): inventory=[${bot.inventory}] | items_required=[${activeOrder.items_required}] | junkItems=[${junkItems}] | needed=[${needed}]`);
     }
 
-    // Move toward nearest needed item, prioritizing bot's zone (light bias)
+    // Build list of all needed items sorted by distance
     const botZone = this.getZone([x, y], state.gridWidth, state.gridHeight);
-    let nearest = null;
-    let nearestDist = Infinity;
-    let nearestInZone = null;
-    let nearestInZoneDist = Infinity;
+    const candidateItems: Array<{ item: any; dist: number; inZone: boolean }> = [];
 
     for (const item of state.items.values()) {
       if (needed.includes(item.type)) {
         const dist = Math.abs(item.position[0] - x) + Math.abs(item.position[1] - y);
         const itemZone = this.getZone(item.position as [number, number], state.gridWidth, state.gridHeight);
-
-        // Track nearest item in bot's zone
-        if (itemZone === botZone && dist < nearestInZoneDist) {
-          nearestInZoneDist = dist;
-          nearestInZone = item;
-        }
-
-        // Track nearest item overall
-        if (dist < nearestDist) {
-          nearestDist = dist;
-          nearest = item;
-        }
+        const inZone = itemZone === botZone;
+        candidateItems.push({ item, dist, inZone });
       }
     }
 
-    // Prefer item in bot's zone only if it's strictly closer
-    if (nearestInZone && nearestInZoneDist < nearestDist) {
-      nearest = nearestInZone;
-    }
+    // Sort by distance
+    candidateItems.sort((a, b) => a.dist - b.dist);
 
-    // If found a needed item, go get it
-    if (nearest) {
+    // Try items in distance order until we find a reachable one
+    for (const { item: targetItem } of candidateItems) {
       if (state.round >= 200) {
-        console.log(`  [DEBUG Bot ${bot.id}] Moving to needed item "${nearest.type}" at (${nearest.position[0]}, ${nearest.position[1]})`);
+        console.log(`  [DEBUG Bot ${bot.id}] Trying needed item "${targetItem.type}" at (${targetItem.position[0]}, ${targetItem.position[1]})`);
       }
 
-      // Try to pathfind to the item
-      const moveAction = this.getPathfinder(bot.id).moveTowardWithPath(bot.id, [x, y], nearest.position as [number, number], state.gridWidth, state.gridHeight, state.bots);
+      // Try to pathfind to this item
+      const moveAction = this.getPathfinder(bot.id).moveTowardWithPath(bot.id, [x, y], targetItem.position as [number, number], state.gridWidth, state.gridHeight, state.bots);
 
       // If unreachable AND holding items, drop off first then retry
       if (moveAction.action === 'wait' && bot.inventory.length > 0) {
         if (true) {  // Always log
-          console.log(`  [UNREACHABLE] Bot ${bot.id} can't reach item at (${nearest.position[0]}, ${nearest.position[1]}), going to dropoff first with [${bot.inventory.join(', ')}]`);
+          console.log(`  [UNREACHABLE] Bot ${bot.id} can't reach item at (${targetItem.position[0]}, ${targetItem.position[1]}), going to dropoff first with [${bot.inventory.join(', ')}]`);
         }
         return this.getPathfinder(bot.id).moveTowardWithPath(bot.id, [x, y], [dropOff.x, dropOff.y], state.gridWidth, state.gridHeight, state.bots);
       }
 
-      return moveAction;
+      // If reachable (action is not 'wait'), use it
+      if (moveAction.action !== 'wait') {
+        return moveAction;
+      }
+
+      // If unreachable and empty inventory, skip this item and try next
+      if (moveAction.action === 'wait' && bot.inventory.length === 0) {
+        if (state.round >= 150) {
+          console.log(`  [SKIP-UNREACHABLE] Bot ${bot.id} skipping unreachable item "${targetItem.type}" at (${targetItem.position[0]}, ${targetItem.position[1]}), trying next...`);
+        }
+        continue;
+      }
     }
 
     // If holding items but no more needed, go deliver
