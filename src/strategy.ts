@@ -264,7 +264,8 @@ export class BotStrategy {
 
 
     if (bot.inventory.length > 0 && x === dropOff.x && y === dropOff.y) {
-      // CRITICAL: Detect if dropoff attempts are failing (inventory not clearing)
+      // CRITICAL FIRST: Check if oscillation abandonment applies (happens before any other dropoff logic)
+      // Detect if dropoff attempts are failing (inventory not clearing)
       if (lastState) {
         const samePos = lastState.pos[0] === x && lastState.pos[1] === y;
         const lastWasDropoff = lastState.action === 'drop_off';
@@ -299,6 +300,26 @@ export class BotStrategy {
         if (y - 1 >= 0) return { bot: bot.id, action: 'move_up' };
         // If can't move away, just wait
         return { bot: bot.id, action: 'wait' };
+      }
+
+      // SECOND: Check inventory sequence (but don't return - just note it)
+      // Verify inventory sequence matches what's NEEDED at dropoff
+      // If bot is at dropoff but holding items that don't start with the next needed position,
+      // the server will reject the drop ANYWAY. So just drop immediately.
+      if (activeOrder) {
+        const nextPosition = activeOrder.items_delivered.length;
+        const nextNeededType = activeOrder.items_required[nextPosition];
+        const firstItemInInventory = bot.inventory[0];
+
+        // Check if first item matches the next needed position
+        if (firstItemInInventory !== nextNeededType) {
+          // Inventory is OUT OF SEQUENCE - server will reject anyway
+          // Just drop it to clear inventory and let other bots try
+          if (state.round < 150) {
+            console.log(`    [SEQUENCE-MISMATCH] Bot ${bot.id} at dropoff with [${bot.inventory}] - first item ${firstItemInInventory} doesn't match next needed position ${nextPosition}=${nextNeededType}. Dropping anyway.`);
+          }
+          return { bot: bot.id, action: 'drop_off' };
+        }
       }
 
       if (activeOrder) {
@@ -483,6 +504,46 @@ export class BotStrategy {
 
     // NO ASSIGNMENT - use remaining items opportunistically
     // Only grab adjacent items if they're not assigned to another bot
+    // CRITICAL: If bot has items, verify adjacent items continue the sequence
+    for (const item of state.items.values()) {
+      // CRITICAL: ONLY pick items that are (1) needed and (2) in the active order
+      const isInOrder = activeOrder && activeOrder.items_required.includes(item.type);
+      if (needed.includes(item.type) && !itemsAssignedToOthers.has(item.id) && isInOrder) {
+        const [ix, iy] = item.position;
+        const dist = Math.abs(ix - x) + Math.abs(iy - y);
+
+        // Check sequence compatibility only if bot already has items
+        if (bot.inventory.length > 0) {
+          // Bot has items - only pick if this item matches next sequence positions
+          const nextPosition = activeOrder.items_delivered.length;
+          let itemBelongsInNextSequence = false;
+
+          // Check if item type belongs in any of the next ~3 positions
+          for (let pos = nextPosition; pos < Math.min(nextPosition + 3, activeOrder.items_required.length); pos++) {
+            if (activeOrder.items_required[pos] === item.type) {
+              itemBelongsInNextSequence = true;
+              break;
+            }
+          }
+
+          if (!itemBelongsInNextSequence) {
+            // Skip this item - it doesn't match sequence
+            if (state.round < 150 && dist <= 1) {
+              console.log(`    [SKIP-WRONG-SEQ] Bot ${bot.id} skipping adjacent "${item.type}" - doesn't match sequence after position ${nextPosition}`);
+            }
+            continue;
+          }
+        }
+
+        // If adjacent or at location, pick up
+        if (dist <= 1) {
+          if (state.round < 150) {
+            console.log(`    [SAFE-PICKUP] Bot ${bot.id} picking adjacent needed item "${item.type}"`);
+          }
+          return { bot: bot.id, action: 'pick_up', item_id: item.id };
+        }
+      }
+    }
     for (const item of state.items.values()) {
       // CRITICAL: ONLY pick items that are (1) needed and (2) in the active order
       const isInOrder = activeOrder && activeOrder.items_required.includes(item.type);
