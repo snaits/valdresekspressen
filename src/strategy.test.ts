@@ -2352,6 +2352,50 @@ describe('BotStrategy - Movement Logic', () => {
       // Should not be stuck - either move toward reachable cheese or use fallback
       expect(actions[0].action).not.toBe('wait');
     });
+
+    it('should ignore orchestrator assignment and go to dropoff when holding items', () => {
+      // Bot with inventory should NEVER use orchestrator assignment to collect more
+      // This was the bug: bot at (1,9) with items was waiting instead of dropping at (1,10)
+      const mockState: ServerGameState = {
+        round: 99,
+        max_round: 300,
+        grid: { width: 16, height: 12 },
+        drop_off: [1, 10],
+        bots: [
+          { id: 0, position: [1, 9], inventory: ['eggs', 'cheese'] }, // Holding items, 1 step from dropoff
+          { id: 1, position: [5, 5], inventory: [] },
+          { id: 2, position: [8, 8], inventory: [] },
+        ],
+        items: [
+          { id: 'item_0', type: 'milk', position: [7, 5] },   // Would be assigned to bot 0 by orchestrator
+          { id: 'item_1', type: 'butter', position: [5, 7] }, // Assigned to bot 1
+        ],
+        orders: [
+          {
+            id: 'order_0',
+            items_required: ['eggs', 'cheese', 'milk', 'butter'],
+            items_delivered: [],
+            status: 'active',
+          },
+        ],
+        score: 3,
+      };
+
+      gameState.updateFromServer(mockState);
+      const actions = strategy.decideBotActions();
+
+      // Bot 0 MUST go to dropoff (1,10), not to milk (7,5)
+      // Should move down or at least not wait
+      expect(actions[0].action).not.toBe('wait');
+      // Should move toward dropoff (down/toward y=10)
+      expect(actions[0].action).toBe('move_down');
+
+      // Bot 1 should use orchestrator assignment (pathfind to milk)
+      expect(actions[1].action).not.toBe('wait');
+
+      // Bot 2 should use orchestrator assignment (pathfind to butter)
+      expect(actions[2].action).not.toBe('wait');
+    });
   });
 });
 

@@ -62,12 +62,14 @@ async function handleGameState(serverState: ServerGameState): Promise<ClientActi
 
   // Debug: Log first 15 rounds with full position info
   if (state.round < 15) {
+    const bots_info = state.bots.map(b => `Bot ${b.id} (${b.position.x},${b.position.y})`).join(' | ');
     console.log(
-      `Round ${state.round}/${state.maxRound} | Score: ${state.score} | Bot 0 pos: (${state.bots[0]?.position.x}, ${state.bots[0]?.position.y}) | inv: [${state.bots[0]?.inventory.join(', ') || ''}]`
+      `Round ${state.round}/${state.maxRound} | Score: ${state.score} | ${bots_info}`
     );
   } else {
+    const bots_info = state.bots.map(b => `Bot ${b.id} (${b.position.x},${b.position.y})`).join(' | ');
     console.log(
-      `Round ${state.round}/${state.maxRound} | Score: ${state.score} | Bot 0 pos: (${state.bots[0]?.position.x}, ${state.bots[0]?.position.y})`
+      `Round ${state.round}/${state.maxRound} | Score: ${state.score} | ${bots_info}`
     );
   }
 
