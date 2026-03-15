@@ -205,7 +205,7 @@ export class BotStrategy {
       return this.getPathfinder(bot.id).moveTowardWithPath(bot.id, [x, y], [dropOff.x, dropOff.y], state.gridWidth, state.gridHeight, state.bots);
     }
 
-    // If stuck with no items, pick up ONLY NEEDED ITEMS that are adjacent, or fallback toward nearest needed item
+    // If stuck with no items, try pathfinding to multiple items (skip unreachable ones)
     if (isStuck && bot.inventory.length === 0 && itemsStillNeeded.length > 0) {
       // Try to pick up adjacent NEEDED item to make progress
       for (const item of state.items.values()) {
@@ -221,22 +221,45 @@ export class BotStrategy {
         }
       }
 
-      // No adjacent needed items - try fallback toward NEAREST NEEDED ITEM
-      let nearestNeededItem: any = null;
-      let nearestDist = Infinity;
+      // Build sorted list of needed items and try pathfinding to find a reachable one
+      const stuckCandidates: Array<{ item: any; dist: number }> = [];
       for (const item of state.items.values()) {
-        if (itemsStillNeeded.includes(item.type)) { // ONLY NEEDED ITEMS
+        if (itemsStillNeeded.includes(item.type)) {
           const dist = Math.abs(item.position[0] - x) + Math.abs(item.position[1] - y);
-          if (dist < nearestDist) {
-            nearestDist = dist;
-            nearestNeededItem = item;
-          }
+          stuckCandidates.push({ item, dist });
         }
       }
 
-      if (nearestNeededItem) {
+      // Sort by distance
+      stuckCandidates.sort((a, b) => a.dist - b.dist);
+
+      // Try pathfinding to each item - skip unreachable ones
+      for (const { item: candidateItem } of stuckCandidates) {
         if (state.round <= 10) {
-          console.log(`  [DEBUG Bot ${bot.id}] Stuck using fallback toward NEEDED item "${nearestNeededItem.type}" at (${nearestNeededItem.position[0]}, ${nearestNeededItem.position[1]})`);
+          console.log(`  [DEBUG Bot ${bot.id}] Stuck: trying pathfinding to "${candidateItem.type}" at (${candidateItem.position[0]}, ${candidateItem.position[1]})`);
+        }
+
+        const moveAction = this.getPathfinder(bot.id).moveTowardWithPath(bot.id, [x, y], candidateItem.position as [number, number], state.gridWidth, state.gridHeight, state.bots);
+
+        // If reachable, use it
+        if (moveAction.action !== 'wait') {
+          if (state.round <= 10) {
+            console.log(`  [DEBUG Bot ${bot.id}] Stuck: found reachable item "${candidateItem.type}", moving`);
+          }
+          return moveAction;
+        }
+
+        // If unreachable, skip and try next
+        if (state.round <= 10) {
+          console.log(`  [DEBUG Bot ${bot.id}] Stuck: skipping unreachable item "${candidateItem.type}", trying next...`);
+        }
+      }
+
+      // If no reachable items found, use fallback movement to escape the immediate area
+      if (stuckCandidates.length > 0) {
+        const nearestNeededItem = stuckCandidates[0].item;
+        if (state.round <= 10) {
+          console.log(`  [DEBUG Bot ${bot.id}] Stuck: no reachable items, fallback toward "${nearestNeededItem.type}" at (${nearestNeededItem.position[0]}, ${nearestNeededItem.position[1]})`);
         }
         return this.fallbackMovement(bot.id, x, y, nearestNeededItem.position[0], nearestNeededItem.position[1], state.round);
       }
