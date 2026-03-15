@@ -299,7 +299,10 @@ export class BotStrategy {
     // Get orchestrator assignment for this bot
     const assignment = this.assignedTargets?.get(bot.id);
     let assignedItem: any = null;
-    if (assignment?.targetItemId) {
+
+    // Only use orchestrator assignment if we have empty inventory
+    // Bots with items should go to dropoff, not collect more
+    if (bot.inventory.length === 0 && assignment?.targetItemId) {
       assignedItem = state.items.get(assignment.targetItemId);
     }
 
