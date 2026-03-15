@@ -15,6 +15,7 @@ export class Pathfinder {
   private cachedTarget: [number, number] | null = null;
   private cachedStart: [number, number] | null = null;
   private pathIndex: number = 0;
+  private lastReachedPosition: [number, number] | null = null;
 
   /**
    * Find shortest path from start to target using BFS
@@ -104,8 +105,15 @@ export class Pathfinder {
     // Check if we're still on the cached path (at the expected position)
     const startChanged = !this.cachedStart || this.cachedStart[0] !== start[0] || this.cachedStart[1] !== start[1];
 
-    // Path is invalid if: target changed, start changed unexpectedly, or we reached end
-    const pathInvalid = this.pathIndex >= this.cachedPath.length;
+    // Check if path has become stale: pathIndex advanced but bot hasn't moved
+    // This indicates the attempted move failed (hit a wall or obstacle)
+    const noProgress = this.lastReachedPosition &&
+                       this.lastReachedPosition[0] === start[0] &&
+                       this.lastReachedPosition[1] === start[1] &&
+                       this.pathIndex > 0;
+
+    // Path is invalid if: target changed, start changed unexpectedly, we reached end, or no progress made
+    const pathInvalid = this.pathIndex >= this.cachedPath.length || noProgress;
 
     if (targetChanged || startChanged || pathInvalid || this.cachedPath.length === 0) {
       // Recalculate path
@@ -113,6 +121,7 @@ export class Pathfinder {
       this.cachedTarget = target;
       this.cachedStart = start;
       this.pathIndex = 0;
+      this.lastReachedPosition = start;
     }
 
     if (this.cachedPath.length <= 1) {
@@ -141,6 +150,9 @@ export class Pathfinder {
     if (next[1] > y) return { bot: botId, action: 'move_down' };
     if (next[1] < y) return { bot: botId, action: 'move_up' };
 
+    // Update last reached position to current position (for next call)
+    this.lastReachedPosition = [x, y];
+
     return { bot: botId, action: 'wait' };
   }
 
@@ -168,6 +180,7 @@ export class Pathfinder {
     this.cachedTarget = null;
     this.cachedStart = null;
     this.pathIndex = 0;
+    this.lastReachedPosition = null;
   }
 
   /**

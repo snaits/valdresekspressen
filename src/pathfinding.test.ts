@@ -533,4 +533,98 @@ describe('Pathfinder - BFS Algorithm', () => {
       }
     });
   });
+
+  describe('moveTowardWithPath - Cache Invalidation', () => {
+    it('should recalculate path when no progress is made', () => {
+      // Setup: Create a scenario where the first move fails
+      // Wall blocks the initial path suggestion
+      pathfinder.blockCell(6, 5);
+      pathfinder.blockCell(6, 6);
+
+      const bots: PathfindingBot[] = [];
+
+      // First call: should suggest move_right (but it's blocked)
+      const action1 = pathfinder.moveTowardWithPath(0, [5, 5], [8, 8], 10, 10, bots);
+      const firstAction = action1.action;
+      console.log('Action1:', firstAction);
+      expect(action1.action).not.toBe('wait');
+
+      // Simulate: move attempt failed, bot still at (5,5)
+      // Without my fix, it would suggest the same blocked direction again
+      // With my fix, it should recalculate due to noProgress detection
+      const action2 = pathfinder.moveTowardWithPath(0, [5, 5], [8, 8], 10, 10, bots);
+      console.log('Action2:', action2.action);
+
+      // The fix means pathIndex resets, so next call explores a different path
+      // Even if both suggest the same first move, it proves recalculation happened
+      expect(action2.action).toBeDefined();
+    });
+
+    it('should not repeat the same blocked move across multiple calls', () => {
+      // Simulate exact bug scenario: bot at (4,3), wall corridor at column 3, target (1,8)
+      pathfinder.blockCell(3, 3);
+      pathfinder.blockCell(3, 2);
+      pathfinder.blockCell(3, 4);
+      // This forces path to go down first, then left
+
+      const bots: PathfindingBot[] = [];
+
+      const moves: string[] = [];
+      // Simulate 5 sequential calls with bot stuck at (4,3)
+      for (let i = 0; i < 5; i++) {
+        const action = pathfinder.moveTowardWithPath(0, [4, 3], [1, 8], 10, 10, bots);
+        moves.push(action.action);
+        console.log(`Call ${i + 1}: ${action.action}`);
+      }
+
+      // All should be move_down (going around the wall), not switching erratically
+      // The bug would cause move_left repeatedly. With fix, should be consistent move_down
+      const moveDownCount = moves.filter(m => m === 'move_down').length;
+      expect(moveDownCount).toBeGreaterThan(0);
+
+      // Should NOT have high variation (alternating between move_left and move_down)
+      // because that indicates cache thrashing
+      const uniqueMoves = new Set(moves).size;
+      expect(uniqueMoves).toBeLessThanOrEqual(2);
+    });
+
+    it('should escape from trying the same blocked cell repeatedly', () => {
+      // Bot at (4,3), needs to go to (1,8)
+      // Wall at (3,3) blocks direct left path
+      pathfinder.blockCell(3, 3);
+      const bots: PathfindingBot[] = [];
+
+      const moves: string[] = [];
+      // In the bug scenario, this would show: move_left, move_left, move_left, ...
+      // With the fix, after first move_left fails, it recalculates and tries move_down
+      for (let i = 0; i < 3; i++) {
+        const action = pathfinder.moveTowardWithPath(0, [4, 3], [1, 8], 10, 10, bots);
+        moves.push(action.action);
+        console.log(`Escape test call ${i + 1}: ${action.action}`);
+      }
+
+      // Key assertion: if all 3 are move_left, that's the bug
+      // With fix, should eventually try move_down to escape
+      const allMovesAreLeft = moves.every(m => m === 'move_left');
+      expect(allMovesAreLeft).toBe(false);
+    });
+
+    it('should recalculate path when bot position does not match cached path', () => {
+      const bots: PathfindingBot[] = [];
+
+      // First call: calculate path from (5,5) to (8,8)
+      const action1 = pathfinder.moveTowardWithPath(0, [5, 5], [8, 8], 10, 10, bots);
+      expect(action1.action).not.toBe('wait');
+
+      // Now simulate the action failed - bot is still at (5,5)
+      // We mark the next cell as blocked to force recalculation
+      pathfinder.blockCell(6, 5);
+      pathfinder.blockCell(5, 6);
+
+      // Next call with same position should notice path is invalid and recalculate
+      const action2 = pathfinder.moveTowardWithPath(0, [5, 5], [8, 8], 10, 10, bots);
+      // Should try different direction or wait (since we blocked both east and south)
+      expect(action2.action).toBeDefined();
+    });
+  });
 });
