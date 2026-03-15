@@ -555,9 +555,10 @@ describe('BotStrategy - Movement Logic', () => {
     });
 
     it('should reduce needed items count by delivered items', () => {
+      // CRITICAL: Must respect sequential delivery ordering
       // Order needs [butter, butter, yogurt, milk]
-      // But 1 butter and 1 milk already delivered
-      // Bot should pick: [butter, yogurt]
+      // First butter is already delivered at position 0
+      // Next assignment should fulfill position 1 (second butter)
       const mockState: ServerGameState = {
         round: 15,
         max_round: 120,
@@ -591,17 +592,18 @@ describe('BotStrategy - Movement Logic', () => {
           {
             id: 'order_0',
             items_required: ['butter', 'butter', 'yogurt', 'milk'],
-            items_delivered: ['butter', 'milk'], // Partial delivery
+            items_delivered: ['butter'], // First butter delivered at position 0
             status: 'active',
           },
         ],
-        score: 2,
+        score: 1,
       };
 
       gameState.updateFromServer(mockState);
       const actions = strategy.decideBotActions();
 
-      // Bot at (5,2), nearest needed item should be butter at (3,2)
+      // Bot at (5,2), orchestrator should assign next needed item by sequence
+      // Next position is 1 (butter), which is at (3,2)
       // Move LEFT toward it
       expect(actions[0].action).toBe('move_left');
     });
