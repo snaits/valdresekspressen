@@ -2485,6 +2485,54 @@ describe('BotStrategy - Movement Logic', () => {
       // Bot 2 should use orchestrator assignment (pathfind to butter)
       expect(actions[2].action).not.toBe('wait');
     });
+
+    it('CRITICAL: should ONLY pick assigned item, not other items of same type', () => {
+      // CRITICAL BUG FIX: Bot should pick ONLY its assigned item
+      // If assigned to egg_2, it should pick egg_2, not milk_1 or egg_1
+      // Order: [eggs, eggs, milk, milk, cheese]
+      const mockState: ServerGameState = {
+        round: 5,
+        max_round: 300,
+        grid: { width: 16, height: 12 },
+        drop_off: [1, 10],
+        bots: [
+          { id: 0, position: [3, 3], inventory: [] }, // Empty, ready to collect
+          { id: 1, position: [12, 12], inventory: [] },
+          { id: 2, position: [12, 3], inventory: [] },
+        ],
+        items: [
+          { id: 'egg_1', type: 'eggs', position: [5, 5] },     // Far away
+          { id: 'egg_2', type: 'eggs', position: [3, 4] },     // Adjacent to bot 0
+          { id: 'milk_1', type: 'milk', position: [4, 3] },    // Also adjacent to bot 0
+          { id: 'milk_2', type: 'milk', position: [12, 8] },
+          { id: 'cheese', type: 'cheese', position: [8, 8] },
+        ],
+        orders: [
+          {
+            id: 'order_0',
+            items_required: ['eggs', 'eggs', 'milk', 'milk', 'cheese'],
+            items_delivered: [],
+            status: 'active',
+          },
+        ],
+        score: 0,
+      };
+
+      gameState.updateFromServer(mockState);
+      const actions = strategy.decideBotActions();
+
+      const bot0Action = actions[0];
+      // Bot 0 should be assigned to egg_2 (closest egg for position 0)
+      // When adjacent (dist=1), should pick it up
+      // NOT pick milk_1 which is also adjacent
+      if (bot0Action.action === 'pick_up') {
+        // If picking up, must be the egg (position [3,4]), not milk (position [4,3])
+        expect(bot0Action.item_id).toBe('egg_2');
+      } else {
+        // OR moving toward it (if not adjacent yet)
+        expect(['move_up', 'move_right', 'move_left', 'move_down']).toContain(bot0Action.action);
+      }
+    });
   });
 });
 

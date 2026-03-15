@@ -323,18 +323,38 @@ export class BotStrategy {
       }
     }
 
-    // Try to pick up the orchestrator-assigned item if adjacent
+    // CRITICAL: If we have an assigned target, ONLY collect that item
+    // Do not pick up other adjacent items or pathfind to other items
     if (assignedItem && needed.includes(assignedItem.type)) {
       const [ix, iy] = assignedItem.position;
       const dist = Math.abs(ix - x) + Math.abs(iy - y);
+
       if (dist <= 1) {
+        // Adjacent to assigned item - pick it up
         return { bot: bot.id, action: 'pick_up', item_id: assignedItem.id };
       }
+
+      // Not adjacent - pathfind toward assigned item
+      const moveAction = this.getPathfinder(bot.id).moveTowardWithPath(bot.id, [x, y], assignedItem.position as [number, number], state.gridWidth, state.gridHeight, state.bots);
+
+      if (moveAction.action !== 'wait') {
+        // Reachable - move toward it
+        return moveAction;
+      }
+
+      // If unreachable and holding items, drop off first
+      if (bot.inventory.length > 0) {
+        return this.getPathfinder(bot.id).moveTowardWithPath(bot.id, [x, y], [dropOff.x, dropOff.y], state.gridWidth, state.gridHeight, state.bots);
+      }
+
+      // If unreachable and empty, wait (can't reach assigned item)
+      return { bot: bot.id, action: 'wait' };
     }
 
+    // NO ASSIGNMENT - use remaining items opportunistically
     // Only grab adjacent items if they're not assigned to another bot
     for (const item of state.items.values()) {
-      if (needed.includes(item.type) && !itemsAssignedToOthers.has(item.id) && item.id !== assignedItem?.id) {
+      if (needed.includes(item.type) && !itemsAssignedToOthers.has(item.id)) {
         const [ix, iy] = item.position;
         const dist = Math.abs(ix - x) + Math.abs(iy - y);
 
@@ -345,23 +365,6 @@ export class BotStrategy {
       }
     }
 
-    // If no assigned item is adjacent, try pathfinding to assigned target first
-    if (assignedItem && needed.includes(assignedItem.type)) {
-      const moveAction = this.getPathfinder(bot.id).moveTowardWithPath(bot.id, [x, y], assignedItem.position as [number, number], state.gridWidth, state.gridHeight, state.bots);
-
-      // If reachable, use it
-      if (moveAction.action !== 'wait') {
-        return moveAction;
-      }
-
-      // If unreachable and holding items, drop off first
-      if (moveAction.action === 'wait' && bot.inventory.length > 0) {
-        return this.getPathfinder(bot.id).moveTowardWithPath(bot.id, [x, y], [dropOff.x, dropOff.y], state.gridWidth, state.gridHeight, state.bots);
-      }
-
-      // If unreachable and empty inventory, fall through to try other items
-    }
-
     // Check if carrying junk items (items NOT in the active order at all)
     const junkItems = bot.inventory.filter((item: string) => !activeOrder.items_required.includes(item));
 
@@ -370,50 +373,50 @@ export class BotStrategy {
       return this.getPathfinder(bot.id).moveTowardWithPath(bot.id, [x, y], [dropOff.x, dropOff.y], state.gridWidth, state.gridHeight, state.bots);
     }
 
-    // Build list of all needed items sorted by distance
-    const botZone = this.getZone([x, y], state.gridWidth, state.gridHeight);
-    const candidateItems: Array<{ item: any; dist: number; inZone: boolean }> = [];
+    // CRITICAL: Only try other items if there was NO orchestrator assignment
+    // If we had an assignment, we already tried it above and it was unreachable/incomplete
+    // Don't fall back to other items - wait for assignment or go deliver what we have
+    if (!assignedItem) {
+      // Build list of all needed items sorted by distance
+      const botZone = this.getZone([x, y], state.gridWidth, state.gridHeight);
+      const candidateItems: Array<{ item: any; dist: number; inZone: boolean }> = [];
 
-    for (const item of state.items.values()) {
-      if (needed.includes(item.type)) {
-        const dist = Math.abs(item.position[0] - x) + Math.abs(item.position[1] - y);
-        const itemZone = this.getZone(item.position as [number, number], state.gridWidth, state.gridHeight);
-        const inZone = itemZone === botZone;
-        candidateItems.push({ item, dist, inZone });
-      }
-    }
-
-    // Sort by distance
-    candidateItems.sort((a, b) => a.dist - b.dist);
-
-    // Try items in distance order until we find a reachable one
-    for (const { item: targetItem } of candidateItems) {
-      // Skip if this is the assigned target (already tried above)
-      if (assignedItem && targetItem.id === assignedItem.id) {
-        continue;
+      for (const item of state.items.values()) {
+        if (needed.includes(item.type)) {
+          const dist = Math.abs(item.position[0] - x) + Math.abs(item.position[1] - y);
+          const itemZone = this.getZone(item.position as [number, number], state.gridWidth, state.gridHeight);
+          const inZone = itemZone === botZone;
+          candidateItems.push({ item, dist, inZone });
+        }
       }
 
-      // Skip if this item is assigned to another bot (multi-bot coordination)
-      if (itemsAssignedToOthers.has(targetItem.id)) {
-        continue;
-      }
+      // Sort by distance
+      candidateItems.sort((a, b) => a.dist - b.dist);
 
-      // Try to pathfind to this item
-      const moveAction = this.getPathfinder(bot.id).moveTowardWithPath(bot.id, [x, y], targetItem.position as [number, number], state.gridWidth, state.gridHeight, state.bots);
+      // Try items in distance order until we find a reachable one
+      for (const { item: targetItem } of candidateItems) {
+        // Skip if this item is assigned to another bot (multi-bot coordination)
+        if (itemsAssignedToOthers.has(targetItem.id)) {
+          continue;
+        }
 
-      // If unreachable AND holding items, drop off first then retry
-      if (moveAction.action === 'wait' && bot.inventory.length > 0) {
-        return this.getPathfinder(bot.id).moveTowardWithPath(bot.id, [x, y], [dropOff.x, dropOff.y], state.gridWidth, state.gridHeight, state.bots);
-      }
+        // Try to pathfind to this item
+        const moveAction = this.getPathfinder(bot.id).moveTowardWithPath(bot.id, [x, y], targetItem.position as [number, number], state.gridWidth, state.gridHeight, state.bots);
 
-      // If reachable (action is not 'wait'), use it
-      if (moveAction.action !== 'wait') {
-        return moveAction;
-      }
+        // If unreachable AND holding items, drop off first then retry
+        if (moveAction.action === 'wait' && bot.inventory.length > 0) {
+          return this.getPathfinder(bot.id).moveTowardWithPath(bot.id, [x, y], [dropOff.x, dropOff.y], state.gridWidth, state.gridHeight, state.bots);
+        }
 
-      // If unreachable and empty inventory, skip this item and try next
-      if (moveAction.action === 'wait' && bot.inventory.length === 0) {
-        continue;
+        // If reachable (action is not 'wait'), use it
+        if (moveAction.action !== 'wait') {
+          return moveAction;
+        }
+
+        // If unreachable and empty inventory, skip this item and try next
+        if (moveAction.action === 'wait' && bot.inventory.length === 0) {
+          continue;
+        }
       }
     }
 
