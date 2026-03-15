@@ -7,7 +7,7 @@ export class BotStrategy {
   private gameState: GameStateManager;
   private orchestrator: BotOrchestrator;
   private pathfinders: Map<number, Pathfinder> = new Map(); // One pathfinder per bot
-  private lastBotStates: Map<number, { pos: [number, number], action: string, stuckCount: number, dropoffFailCount?: number, lastInventorySize?: number, failedDropoffInventorySize?: number }> = new Map();
+  private lastBotStates: Map<number, { pos: [number, number], action: string, stuckCount: number, dropoffFailCount?: number, lastInventorySize?: number, failedDropoffInventorySize?: number, lastOrderIdSeen?: string }> = new Map();
   private lastOrderId: string | undefined;
   private assignedTargets: Map<number, BotAssignment> = new Map(); // Current round's assigned targets
 
@@ -102,6 +102,7 @@ export class BotStrategy {
       actions.push(action);
 
       // Save bot state for next round (to detect stuck moves and dropoff failures)
+      const activeOrder = state.orders.find((o: any) => o.status === 'active');
       const prevState = this.lastBotStates.get(bot.id);
       this.lastBotStates.set(bot.id, {
         pos: [bot.position.x, bot.position.y],
@@ -109,6 +110,7 @@ export class BotStrategy {
         stuckCount: prevState?.stuckCount || 0,
         dropoffFailCount: prevState?.dropoffFailCount || 0,
         lastInventorySize: bot.inventory.length,
+        lastOrderIdSeen: activeOrder?.id,
       });
     }
 
@@ -120,6 +122,27 @@ export class BotStrategy {
 
     // Find active order first
     const activeOrder = state.orders.find((o: any) => o.status === 'active');
+    const currentOrderId = activeOrder?.id;
+
+    // CRITICAL: Detect when active order CHANGES for a bot
+    // Old inventory from previous order should be treated as junk in new order
+    const lastState = this.lastBotStates.get(bot.id);
+    if (lastState && lastState.lastOrderIdSeen !== currentOrderId && lastState.lastOrderIdSeen !== undefined) {
+      // Order changed! Any inventory not matching the NEW order is now junk
+      if (activeOrder) {
+        const oldInventoryNotInNewOrder = bot.inventory.filter((item: string) => !activeOrder.items_required.includes(item));
+        if (oldInventoryNotInNewOrder.length > 0) {
+          if (state.round < 150) {
+            console.log(`    [ORDER-CHANGED-JUNK] Bot ${bot.id} had inventory [${bot.inventory}] from old order - now junk in new order. Sending to dropoff.`);
+          }
+          // Go drop off all inventory that's not in the new order
+          if (x === dropOff.x && y === dropOff.y) {
+            return { bot: bot.id, action: 'drop_off' };
+          }
+          return this.getPathfinder(bot.id).moveTowardWithPath(bot.id, [x, y], [dropOff.x, dropOff.y], state.gridWidth, state.gridHeight, state.bots);
+        }
+      }
+    }
 
     // Calculate items still needed RIGHT HERE (before stuck detection)
     // This is used throughout the function for stuck recovery and item selection
@@ -136,7 +159,6 @@ export class BotStrategy {
     }
 
     // Clear blocked cells when order changes (new items on map)
-    const currentOrderId = activeOrder?.id;
     if (!this.lastOrderId || this.lastOrderId !== currentOrderId) {
       const pathfinder = this.getPathfinder(bot.id);
       pathfinder.clearBlockedCells();
@@ -152,7 +174,6 @@ export class BotStrategy {
     // Detect stuck moves and learn obstacles
     let obstacleDiscovered = false;
     let isStuck = false;
-    const lastState = this.lastBotStates.get(bot.id);
     if (lastState) {
       const isSamePos = lastState.pos[0] === x && lastState.pos[1] === y;
 
@@ -373,6 +394,29 @@ export class BotStrategy {
       }
     }
 
+    // CRITICAL: If bot has junk items AND inventory is FULL, must drop them
+    // This prevents collecting needed items when full of junk
+    // But if inventory has space, bot can still collect needed items alongside junk
+    if (activeOrder && bot.inventory.length >= 3) {
+      const junkItems = bot.inventory.filter((item: string) => !activeOrder.items_required.includes(item));
+      if (junkItems.length > 0) {
+        // Inventory FULL of (or with) junk - drop it before anything else
+        if (x === dropOff.x && y === dropOff.y) {
+          // At dropoff - drop the junk
+          if (state.round < 150) {
+            console.log(`    [FULL-JUNK-DROP] Bot ${bot.id} dropping full junk inventory [${junkItems}]`);
+          }
+          return { bot: bot.id, action: 'drop_off' };
+        } else {
+          // Not at dropoff - move there immediately
+          if (state.round < 150) {
+            console.log(`    [FULL-JUNK-MOVE] Bot ${bot.id} FULL with junk [${junkItems}] - must go to dropoff`);
+          }
+          return this.getPathfinder(bot.id).moveTowardWithPath(bot.id, [x, y], [dropOff.x, dropOff.y], state.gridWidth, state.gridHeight, state.bots);
+        }
+      }
+    }
+
     // Log what we're looking for on first round
     if (state.round === 0) {
       console.log(`  Still needed (${needed.length}): [${needed.map(n => `"${n}"`).join(', ')}]`);
@@ -401,8 +445,16 @@ export class BotStrategy {
       }
     }
 
-    // CRITICAL: If we have an assigned target, ONLY collect that item
-    // Do not pick up other adjacent items or pathfind to other items
+    // CRITICAL SAFETY CHECK: Only pick up items in the active order
+    // Before any pick_up action, verify the item type is needed
+    if (!activeOrder || !activeOrder.items_required.includes(assignedItem?.type)) {
+      if (assignedItem && state.round < 150) {
+        console.log(`    [REJECT-PICKUP] Bot ${bot.id} prevented from picking "${assignedItem.type}" - NOT in active order items_required`);
+      }
+      // Don't pick this up - let fallback logic handle it
+      assignedItem = null;
+    }
+
     if (assignedItem && needed.includes(assignedItem.type)) {
       const [ix, iy] = assignedItem.position;
       const dist = Math.abs(ix - x) + Math.abs(iy - y);
@@ -432,12 +484,17 @@ export class BotStrategy {
     // NO ASSIGNMENT - use remaining items opportunistically
     // Only grab adjacent items if they're not assigned to another bot
     for (const item of state.items.values()) {
-      if (needed.includes(item.type) && !itemsAssignedToOthers.has(item.id)) {
+      // CRITICAL: ONLY pick items that are (1) needed and (2) in the active order
+      const isInOrder = activeOrder && activeOrder.items_required.includes(item.type);
+      if (needed.includes(item.type) && !itemsAssignedToOthers.has(item.id) && isInOrder) {
         const [ix, iy] = item.position;
         const dist = Math.abs(ix - x) + Math.abs(iy - y);
 
         // If adjacent or at location, pick up
         if (dist <= 1) {
+          if (state.round < 150) {
+            console.log(`    [SAFE-PICKUP] Bot ${bot.id} picking adjacent needed item "${item.type}"`);
+          }
           return { bot: bot.id, action: 'pick_up', item_id: item.id };
         }
       }
