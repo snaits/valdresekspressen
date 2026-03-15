@@ -358,7 +358,19 @@ export class BotStrategy {
       if (state.round >= 200) {
         console.log(`  [DEBUG Bot ${bot.id}] Moving to needed item "${nearest.type}" at (${nearest.position[0]}, ${nearest.position[1]})`);
       }
-      return this.getPathfinder(bot.id).moveTowardWithPath(bot.id, [x, y], nearest.position as [number, number], state.gridWidth, state.gridHeight, state.bots);
+
+      // Try to pathfind to the item
+      const moveAction = this.getPathfinder(bot.id).moveTowardWithPath(bot.id, [x, y], nearest.position as [number, number], state.gridWidth, state.gridHeight, state.bots);
+
+      // If unreachable AND holding items, drop off first then retry
+      if (moveAction.action === 'wait' && bot.inventory.length > 0) {
+        if (state.round >= 10) {
+          console.log(`  [DEBUG Bot ${bot.id}] Can't reach item at (${nearest.position[0]}, ${nearest.position[1]}), going to dropoff first with [${bot.inventory.join(', ')}]`);
+        }
+        return this.getPathfinder(bot.id).moveTowardWithPath(bot.id, [x, y], [dropOff.x, dropOff.y], state.gridWidth, state.gridHeight, state.bots);
+      }
+
+      return moveAction;
     }
 
     // If holding items but no more needed, go deliver
