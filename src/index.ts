@@ -81,13 +81,6 @@ async function handleGameState(serverState: ServerGameState): Promise<ClientActi
     }
     console.log(`  Drop-off at: (${state.dropOff.x}, ${state.dropOff.y})`);
 
-    // CHECK FOR WALLS
-    if ((serverState as any).walls) {
-      console.log(`  ⚠️  WALLS DETECTED from server: ${JSON.stringify((serverState as any).walls).substring(0, 100)}...`);
-    } else {
-      console.log(`  ℹ️  No 'walls' field in server message`);
-    }
-
     const activeOrders = gameState.getActiveOrders();
     if (activeOrders.length > 0) {
       console.log(`  Active order needs: [${activeOrders[0].items_required.join(', ')}]`);

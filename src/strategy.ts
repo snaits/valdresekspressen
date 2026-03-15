@@ -157,6 +157,10 @@ export class BotStrategy {
         // We made a move but didn't change position - obstacle discovered!
         lastState.stuckCount++;
 
+        if (lastState.stuckCount === 1 || lastState.stuckCount === 2) {
+          console.log(`    [STUCK-COUNT] stuckCount=${lastState.stuckCount}: at (${x},${y}) after failed ${lastState.action}, inv=[${bot.inventory.join(', ')}]`);
+        }
+
         // Determine what cell we tried to move to
         let blockedX = x;
         let blockedY = y;
@@ -169,6 +173,7 @@ export class BotStrategy {
         if (lastState.stuckCount >= 2) {
           // Stuck for 2+ attempts - try fallback movement to escape
           isStuck = true;
+          console.log(`  [STUCK-DETECT] Round ${state.round}: Bot ${bot.id} stuck at (${x},${y}) after ${lastState.stuckCount} failed ${lastState.action}s, inv=[${bot.inventory.join(', ')}]`);
         }
 
         if (lastState.stuckCount >= 3) {
@@ -182,15 +187,16 @@ export class BotStrategy {
         }
       } else if (!isSamePos) {
         // Movement succeeded, reset stuck counter
+        if (lastState.stuckCount > 0) {
+          console.log(`    [STUCK-RESET] stuckCount reset (was ${lastState.stuckCount}) after successful move to (${x},${y})`);
+        }
         lastState.stuckCount = 0;
       }
     }
 
     // If stuck with items, try to deliver them via fallback movement
     if (isStuck && bot.inventory.length > 0) {
-      if (state.round <= 10) {
-        console.log(`  [DEBUG Bot ${bot.id}] Stuck with inventory, using fallback to dropoff`);
-      }
+      console.log(`  [STUCK-DROPOFF] Round ${state.round}: Bot ${bot.id} stuck with [${bot.inventory.join(', ')}] at (${x},${y}) - GOING TO DROPOFF`);
       return this.fallbackMovement(bot.id, x, y, dropOff.x, dropOff.y, state.round);
     }
 
