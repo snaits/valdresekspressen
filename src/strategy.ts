@@ -7,7 +7,7 @@ export class BotStrategy {
   private gameState: GameStateManager;
   private orchestrator: BotOrchestrator;
   private pathfinders: Map<number, Pathfinder> = new Map(); // One pathfinder per bot
-  private lastBotStates: Map<number, { pos: [number, number], action: string, stuckCount: number, dropoffFailCount?: number, lastInventorySize?: number }> = new Map();
+  private lastBotStates: Map<number, { pos: [number, number], action: string, stuckCount: number, dropoffFailCount?: number, lastInventorySize?: number, failedDropoffInventorySize?: number }> = new Map();
   private lastOrderId: string | undefined;
   private assignedTargets: Map<number, BotAssignment> = new Map(); // Current round's assigned targets
 
@@ -244,7 +244,6 @@ export class BotStrategy {
 
     if (bot.inventory.length > 0 && x === dropOff.x && y === dropOff.y) {
       // CRITICAL: Detect if dropoff attempts are failing (inventory not clearing)
-      let dropoffFailCount = 0;
       if (lastState) {
         const samePos = lastState.pos[0] === x && lastState.pos[1] === y;
         const lastWasDropoff = lastState.action === 'drop_off';
@@ -252,21 +251,25 @@ export class BotStrategy {
 
         if (samePos && lastWasDropoff && inventorySameSize) {
           // Drop attempt failed - inventory unchanged
-          dropoffFailCount = (lastState.dropoffFailCount || 0) + 1;
-          lastState.dropoffFailCount = dropoffFailCount;
-        } else {
-          // Reset counter if we moved or inventory changed
-          lastState.dropoffFailCount = 0;
+          // Mark this inventory size as "failed at dropoff"
+          lastState.failedDropoffInventorySize = bot.inventory.length;
+          if (state.round < 150) {
+            console.log(`    [DROP-OFF-FAILED-FIRST] Bot ${bot.id} drop_off attempt rejected. Moving away and won't retry with this inventory.`);
+          }
+        } else if (bot.inventory.length !== (lastState.failedDropoffInventorySize || -1)) {
+          // Inventory changed - clear the failed marker so bot can try dropping again if needed
+          lastState.failedDropoffInventorySize = undefined;
         }
 
         // Track inventory for next round
         lastState.lastInventorySize = bot.inventory.length;
       }
 
-      // If dropoff attempts have failed 2+ times, GIVE UP and let another bot try
-      if (dropoffFailCount >= 2) {
+      // If THIS inventory was already tried at dropoff and rejected, GIVE UP and move away
+      // User request: "only if it has tried to dropoff and it wasnt accepted. immediately go away from dropoff and let someone else try"
+      if (lastState?.failedDropoffInventorySize === bot.inventory.length) {
         if (state.round < 150) {
-          console.log(`    [DROP-OFF-FAILED] Bot ${bot.id} gave up at dropoff after ${dropoffFailCount} failed attempts. Moving away.`);
+          console.log(`    [COMMITTED-ABANDON] Bot ${bot.id} moving away - this inventory was already rejected at dropoff.`);
         }
         // Move away from dropoff to make room for other bots - try in order: right, left, down, up
         if (x + 1 < state.gridWidth) return { bot: bot.id, action: 'move_right' };

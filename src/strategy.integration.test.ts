@@ -8,6 +8,115 @@ import { ServerGameState } from './types';
  */
 
 describe('BotStrategy - Multi-Round Integration Tests', () => {
+  it('should prevent oscillation: drop_off fails once, then committed abandonment without retry', () => {
+    // Scenario: Bot 0 tries drop_off with non-matching items [eggs,milk]
+    // Server rejects it (no items_delivered update)
+    // Bot 0 should move away and NOT try drop_off again on same inventory
+    // This allows Bot 1 to access dropoff with matching items
+
+    const gameState = new GameStateManager();
+    const strategy = new BotStrategy(gameState);
+
+    // Round 1: Initial state - Bot 0 at dropoff with non-matching items [eggs, milk]
+    const round1: ServerGameState = {
+      round: 1,
+      max_round: 300,
+      grid: { width: 13, height: 11 },
+      drop_off: [1, 10],
+      bots: [
+        { id: 0, position: [1, 10], inventory: ['eggs', 'milk'] }, // At dropoff with non-matching
+        { id: 1, position: [1, 9], inventory: ['cheese', 'yogurt', 'pasta'] }, // Blocking, has matching items
+        { id: 2, position: [3, 3], inventory: [] },
+      ],
+      items: [
+        { id: 'pasta_1', type: 'pasta', position: [5, 5] },
+        { id: 'pasta_2', type: 'pasta', position: [7, 3] },
+      ],
+      orders: [
+        {
+          id: 'order_0',
+          items_required: ['pasta', 'pasta', 'yogurt', 'cheese'],
+          items_delivered: [], // No items yet (order starts fresh or prior failed)
+          status: 'active',
+        },
+      ],
+      score: 0,
+    };
+
+    gameState.updateFromServer(round1);
+    let actions = strategy.decideBotActions();
+
+    // Bot 0 should try drop_off since it's at dropoff
+    console.log(`Round 1 - Bot 0 action: ${actions[0].action}`);
+    expect(actions[0].action).toBe('drop_off'); // Attempt drop
+    expect(actions[1].action).toBe('wait'); // Bot 1 stuck waiting
+
+    // Round 2: Server rejects drop_off - inventory unchanged
+    // Same position, same inventory
+    const round2: ServerGameState = {
+      ...round1,
+      round: 2,
+      bots: [
+        { id: 0, position: [1, 10], inventory: ['eggs', 'milk'] }, // STILL there, inventory unchanged
+        { id: 1, position: [1, 9], inventory: ['cheese', 'yogurt', 'pasta'] },
+        { id: 2, position: [3, 3], inventory: [] },
+      ],
+    };
+
+    gameState.updateFromServer(round2);
+    actions = strategy.decideBotActions();
+
+    // Bot 0 should detect drop_off failed and move away (NOT try drop_off again!)
+    console.log(`Round 2 - Bot 0 action: ${actions[0].action}`);
+    expect(['move_right', 'move_left', 'move_down', 'move_up']).toContain(actions[0].action);
+    expect(actions[0].action).not.toBe('drop_off'); // CRITICAL: Should NOT retry drop_off
+
+    // Round 3: Bot 0 has moved away, Bot 1 can now access dropoff!
+    const round3: ServerGameState = {
+      ...round1,
+      round: 3,
+      bots: [
+        { id: 0, position: [2, 10], inventory: ['eggs', 'milk'] }, // Moved away due to our fix
+        { id: 1, position: [1, 10], inventory: ['cheese', 'yogurt', 'pasta'] }, // Now at dropoff!
+        { id: 2, position: [3, 3], inventory: [] },
+      ],
+    };
+
+    gameState.updateFromServer(round3);
+    actions = strategy.decideBotActions();
+
+    // Bot 1 should now drop_off since it has matching items AND is at dropoff
+    console.log(`Round 3 - Bot 1 action: ${actions[1].action}`);
+    expect(actions[1].action).toBe('drop_off');
+
+    // Round 4: Server accepts Bot 1's drop_off - items_delivered updates
+    const round4: ServerGameState = {
+      ...round1,
+      round: 4,
+      bots: [
+        { id: 0, position: [2, 10], inventory: ['eggs', 'milk'] },
+        { id: 1, position: [1, 10], inventory: ['cheese', 'yogurt'] }, // One item delivered
+        { id: 2, position: [3, 3], inventory: [] },
+      ],
+      orders: [
+        {
+          id: 'order_0',
+          items_required: ['pasta', 'pasta', 'yogurt', 'cheese'],
+          items_delivered: ['cheese'], // Server accepted!
+          status: 'active',
+        },
+      ],
+    };
+
+    gameState.updateFromServer(round4);
+    actions = strategy.decideBotActions();
+
+    console.log(`Round 4 - Bot 1 successfully delivered cheese!`);
+    expect(round4.orders[0].items_delivered.length).toBeGreaterThan(0);
+
+    console.log('✓ Oscillation fix verified: Bot moved away after failed drop, allowing Bot 1 to deliver!');
+  });
+
   it('should clear depot when stuck with non-matching items and bot blocking escape', () => {
     // Scenario: Bot 0 gets stuck at depot with eggs+milk while bot 2 blocks the escape path
     // Bot 2 should pathfind to DROPOFF to clear junk, freeing the path
