@@ -186,11 +186,16 @@ export class BotStrategy {
           obstacleDiscovered = true;
         }
       } else if (!isSamePos) {
-        // Movement succeeded, reset stuck counter
-        if (lastState.stuckCount > 0) {
-          console.log(`    [STUCK-RESET] stuckCount reset (was ${lastState.stuckCount}) after successful move to (${x},${y})`);
+        // Movement succeeded
+        // BUT: Don't reset stuck counter if holding items - we need to stay in delivery mode!
+        if (bot.inventory.length === 0) {
+          if (lastState.stuckCount > 0) {
+            console.log(`    [STUCK-RESET] stuckCount reset (was ${lastState.stuckCount}) after successful move to (${x},${y})`);
+          }
+          lastState.stuckCount = 0;
+        } else {
+          console.log(`    [STUCK-CONTINUING] stuckCount kept at ${lastState.stuckCount} (still holding items) after move to (${x},${y})`);
         }
-        lastState.stuckCount = 0;
       }
     }
 
