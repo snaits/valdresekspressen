@@ -13,6 +13,7 @@ export class Pathfinder {
   private blockedCells: Set<string> = new Set();
   private cachedPath: [number, number][] = [];
   private cachedTarget: [number, number] | null = null;
+  private cachedStart: [number, number] | null = null;
   private pathIndex: number = 0;
 
   /**
@@ -97,14 +98,20 @@ export class Pathfinder {
     gridHeight: number,
     bots: PathfindingBot[]
   ): BotAction {
-    // Check if target changed or path is invalid
+    // Check if target changed
     const targetChanged = !this.cachedTarget || this.cachedTarget[0] !== target[0] || this.cachedTarget[1] !== target[1];
+
+    // Check if we're still on the cached path (at the expected position)
+    const startChanged = !this.cachedStart || this.cachedStart[0] !== start[0] || this.cachedStart[1] !== start[1];
+
+    // Path is invalid if: target changed, start changed unexpectedly, or we reached end
     const pathInvalid = this.pathIndex >= this.cachedPath.length;
 
-    if (targetChanged || pathInvalid) {
+    if (targetChanged || startChanged || pathInvalid || this.cachedPath.length === 0) {
       // Recalculate path
       this.cachedPath = this.findPath(start, target, gridWidth, gridHeight, bots);
       this.cachedTarget = target;
+      this.cachedStart = start;
       this.pathIndex = 0;
     }
 
@@ -159,6 +166,7 @@ export class Pathfinder {
     // Also clear path cache since the valid paths might have changed
     this.cachedPath = [];
     this.cachedTarget = null;
+    this.cachedStart = null;
     this.pathIndex = 0;
   }
 
