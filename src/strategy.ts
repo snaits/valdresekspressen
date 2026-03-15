@@ -194,10 +194,10 @@ export class BotStrategy {
       }
     }
 
-    // If stuck with items, try to deliver them via fallback movement
+    // If stuck with items, try to deliver them via pathfinding
     if (isStuck && bot.inventory.length > 0) {
-      console.log(`  [STUCK-DROPOFF] Round ${state.round}: Bot ${bot.id} stuck with [${bot.inventory.join(', ')}] at (${x},${y}) - GOING TO DROPOFF`);
-      return this.fallbackMovement(bot.id, x, y, dropOff.x, dropOff.y, state.round);
+      console.log(`  [STUCK-DROPOFF] Round ${state.round}: Bot ${bot.id} stuck with [${bot.inventory.join(', ')}] at (${x},${y}) - PATHFINDING TO DROPOFF`);
+      return this.getPathfinder(bot.id).moveTowardWithPath(bot.id, [x, y], [dropOff.x, dropOff.y], state.gridWidth, state.gridHeight, state.bots);
     }
 
     // If stuck with no items, pick up ONLY NEEDED ITEMS that are adjacent, or fallback toward nearest needed item
