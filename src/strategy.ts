@@ -7,7 +7,7 @@ export class BotStrategy {
   private gameState: GameStateManager;
   private orchestrator: BotOrchestrator;
   private pathfinders: Map<number, Pathfinder> = new Map(); // One pathfinder per bot
-  private lastBotStates: Map<number, { pos: [number, number], action: string, stuckCount: number }> = new Map();
+  private lastBotStates: Map<number, { pos: [number, number], action: string, stuckCount: number, dropoffFailCount?: number, lastInventorySize?: number }> = new Map();
   private lastOrderId: string | undefined;
   private assignedTargets: Map<number, BotAssignment> = new Map(); // Current round's assigned targets
 
@@ -101,11 +101,14 @@ export class BotStrategy {
       const action = this.decideAction(bot, state, dropOff);
       actions.push(action);
 
-      // Save bot state for next round (to detect stuck moves)
+      // Save bot state for next round (to detect stuck moves and dropoff failures)
+      const prevState = this.lastBotStates.get(bot.id);
       this.lastBotStates.set(bot.id, {
         pos: [bot.position.x, bot.position.y],
         action: action.action,
-        stuckCount: this.lastBotStates.get(bot.id)?.stuckCount || 0,
+        stuckCount: prevState?.stuckCount || 0,
+        dropoffFailCount: prevState?.dropoffFailCount || 0,
+        lastInventorySize: bot.inventory.length,
       });
     }
 
@@ -240,6 +243,40 @@ export class BotStrategy {
 
 
     if (bot.inventory.length > 0 && x === dropOff.x && y === dropOff.y) {
+      // CRITICAL: Detect if dropoff attempts are failing (inventory not clearing)
+      let dropoffFailCount = 0;
+      if (lastState) {
+        const samePos = lastState.pos[0] === x && lastState.pos[1] === y;
+        const lastWasDropoff = lastState.action === 'drop_off';
+        const inventorySameSize = bot.inventory.length === (lastState.lastInventorySize || 0);
+
+        if (samePos && lastWasDropoff && inventorySameSize) {
+          // Drop attempt failed - inventory unchanged
+          dropoffFailCount = (lastState.dropoffFailCount || 0) + 1;
+          lastState.dropoffFailCount = dropoffFailCount;
+        } else {
+          // Reset counter if we moved or inventory changed
+          lastState.dropoffFailCount = 0;
+        }
+
+        // Track inventory for next round
+        lastState.lastInventorySize = bot.inventory.length;
+      }
+
+      // If dropoff attempts have failed 2+ times, GIVE UP and let another bot try
+      if (dropoffFailCount >= 2) {
+        if (state.round < 150) {
+          console.log(`    [DROP-OFF-FAILED] Bot ${bot.id} gave up at dropoff after ${dropoffFailCount} failed attempts. Moving away.`);
+        }
+        // Move away from dropoff to make room for other bots - try in order: right, left, down, up
+        if (x + 1 < state.gridWidth) return { bot: bot.id, action: 'move_right' };
+        if (x - 1 >= 0) return { bot: bot.id, action: 'move_left' };
+        if (y + 1 < state.gridHeight) return { bot: bot.id, action: 'move_down' };
+        if (y - 1 >= 0) return { bot: bot.id, action: 'move_up' };
+        // If can't move away, just wait
+        return { bot: bot.id, action: 'wait' };
+      }
+
       if (activeOrder) {
         // Only drop if we have items that match the active order requirements
         const itemsNeeded = [...activeOrder.items_required];
@@ -250,11 +287,16 @@ export class BotStrategy {
           }
           return { bot: bot.id, action: 'drop_off' };
         }
-        // If we're holding items that don't match, no point dropping them here
+        // If we're holding items that don't match, move away to let other bots try
         if (state.round < 150) {
           console.log(`    [NO-MATCH] Bot ${bot.id} at dropoff (${x},${y}) but inv=[${bot.inventory}] doesn't match items_needed=[${itemsNeeded}]`);
         }
-        // Fall through to other logic to use/move
+        // Move away to let other bots try - try in order: right, left, down, up
+        if (x + 1 < state.gridWidth) return { bot: bot.id, action: 'move_right' };
+        if (x - 1 >= 0) return { bot: bot.id, action: 'move_left' };
+        if (y + 1 < state.gridHeight) return { bot: bot.id, action: 'move_down' };
+        if (y - 1 >= 0) return { bot: bot.id, action: 'move_up' };
+        return { bot: bot.id, action: 'wait' };
       } else {
         // No active order, just drop everything
         if (state.round < 150) {
