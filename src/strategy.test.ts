@@ -2194,5 +2194,164 @@ describe('BotStrategy - Movement Logic', () => {
       expect(actions[0].action).not.toBe('wait');
     });
   });
+
+  describe('Multi-Bot Coordination with Orchestrator', () => {
+    it('should assign different items to different bots', () => {
+      // 3 bots, all empty, need 3 different items
+      const mockState: ServerGameState = {
+        round: 0,
+        max_round: 300,
+        grid: { width: 12, height: 10 },
+        drop_off: [1, 8],
+        bots: [
+          { id: 0, position: [2, 2], inventory: [] },
+          { id: 1, position: [5, 5], inventory: [] },
+          { id: 2, position: [8, 6], inventory: [] },
+        ],
+        items: [
+          { id: 'item_0', type: 'butter', position: [2, 4] },   // Distance 2 from bot 0
+          { id: 'item_1', type: 'cheese', position: [5, 7] },   // Distance 2 from bot 1
+          { id: 'item_2', type: 'milk', position: [8, 8] },     // Distance 2 from bot 2
+        ],
+        orders: [
+          {
+            id: 'order_0',
+            items_required: ['butter', 'cheese', 'milk'],
+            items_delivered: [],
+            status: 'active',
+          },
+        ],
+        score: 0,
+      };
+
+      gameState.updateFromServer(mockState);
+      const actions = strategy.decideBotActions();
+
+      // Each bot should move toward its assigned item
+      // Bot 0 at (2,2) targeting (2,4): move_down
+      // Bot 1 at (5,5) targeting (5,7): move_down
+      // Bot 2 at (8,6) targeting (8,8): move_down
+      expect(actions[0].action).toBe('move_down');
+      expect(actions[1].action).toBe('move_down');
+      expect(actions[2].action).toBe('move_down');
+    });
+
+    it('should not all bots pick same adjacent item', () => {
+      // 3 bots adjacent to same item, only 1 item to collect
+      // Should only allow 1 pickup
+      const mockState: ServerGameState = {
+        round: 0,
+        max_round: 300,
+        grid: { width: 12, height: 10 },
+        drop_off: [1, 8],
+        bots: [
+          { id: 0, position: [4, 5], inventory: [] },  // Left of item
+          { id: 1, position: [6, 5], inventory: [] },  // Right of item
+          { id: 2, position: [5, 6], inventory: [] },  // Below item
+        ],
+        items: [
+          { id: 'item_0', type: 'butter', position: [5, 5] },   // All bots adjacent
+        ],
+        orders: [
+          {
+            id: 'order_0',
+            items_required: ['butter'],
+            items_delivered: [],
+            status: 'active',
+          },
+        ],
+        score: 0,
+      };
+
+      gameState.updateFromServer(mockState);
+      const actions = strategy.decideBotActions();
+
+      // Count how many pick_up actions there are
+      const pickupActions = actions.filter(a => a.action === 'pick_up').length;
+
+      // Only 1 bot should pick up (the one orchestrator assigned)
+      // Others should move or wait
+      expect(pickupActions).toBeLessThanOrEqual(1);
+    });
+
+    it('should spread bots to unclaimed items', () => {
+      // 3 bots at same location, 2 needed items far away
+      // Should assign: bot 0->item 0, bot 1-> item 1, bot 2 waits/moves to invalid
+      const mockState: ServerGameState = {
+        round: 0,
+        max_round: 300,
+        grid: { width: 12, height: 10 },
+        drop_off: [1, 8],
+        bots: [
+          { id: 0, position: [5, 5], inventory: [] },
+          { id: 1, position: [5, 5], inventory: [] },
+          { id: 2, position: [5, 5], inventory: [] },
+        ],
+        items: [
+          { id: 'item_0', type: 'butter', position: [7, 5] },   // Distance 2, assigned to bot 0
+          { id: 'item_1', type: 'cheese', position: [5, 7] },   // Distance 2, assigned to bot 1
+        ],
+        orders: [
+          {
+            id: 'order_0',
+            items_required: ['butter', 'cheese'],
+            items_delivered: [],
+            status: 'active',
+          },
+        ],
+        score: 0,
+      };
+
+      gameState.updateFromServer(mockState);
+      const actions = strategy.decideBotActions();
+
+      // With orchestrator coordination:
+      // Bot 0 -> assigned to butter at (7,5): move_right
+      // Bot 1 -> assigned to cheese at (5,7): move_down
+      // Bot 2 -> no assigned item, shouldn't pursue others' items: wait or move to unassigned
+      const movements = actions.map(a => a.action);
+      expect(movements).toContain('move_right');  // Some bot going for butter
+      expect(movements).toContain('move_down');   // Some bot going for cheese
+      // Bot 2 should either wait or move somewhere without an assignment
+      expect(movements[2]).toBe('wait');          // Bot 2 has no valid target
+    });
+
+    it('should fallback to greedy when assigned target unreachable', () => {
+      // Bot 0 assigned to butter but unreachable
+      // Should fallback to cheese
+      const mockState: ServerGameState = {
+        round: 0,
+        max_round: 300,
+        grid: { width: 12, height: 10 },
+        drop_off: [1, 8],
+        bots: [
+          { id: 0, position: [1, 2], inventory: [] },
+        ],
+        items: [
+          { id: 'item_0', type: 'butter', position: [3, 2] },    // Assigned but unreachable
+          { id: 'item_1', type: 'cheese', position: [5, 2] },    // Reachable fallback
+        ],
+        orders: [
+          {
+            id: 'order_0',
+            items_required: ['butter', 'cheese'],
+            items_delivered: [],
+            status: 'active',
+          },
+        ],
+        score: 0,
+      };
+
+      // Add walls blocking path to butter
+      const internalState = gameState.getState();
+      internalState.walls = [[2, 1], [2, 2], [2, 3]]; // Wall between bot and butter
+
+      gameState.updateFromServer(mockState);
+      const actions = strategy.decideBotActions();
+
+      // Should not be stuck - either move toward reachable cheese or use fallback
+      expect(actions[0].action).not.toBe('wait');
+    });
+  });
 });
 

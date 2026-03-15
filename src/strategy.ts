@@ -1,7 +1,7 @@
 import { BotAction, Coordinate } from './types';
 import { GameStateManager } from './gameState';
 import { Pathfinder } from './pathfinding';
-import { BotOrchestrator } from './orchestrator';
+import { BotOrchestrator, BotAssignment } from './orchestrator';
 
 export class BotStrategy {
   private gameState: GameStateManager;
@@ -9,7 +9,7 @@ export class BotStrategy {
   private pathfinders: Map<number, Pathfinder> = new Map(); // One pathfinder per bot
   private lastBotStates: Map<number, { pos: [number, number], action: string, stuckCount: number }> = new Map();
   private lastOrderId: string | undefined;
-  private assignedTargets: Map<number, string | null> = new Map(); // Current round's assigned targets
+  private assignedTargets: Map<number, BotAssignment> = new Map(); // Current round's assigned targets
 
   constructor(gameState: GameStateManager) {
     this.gameState = gameState;
@@ -93,6 +93,9 @@ export class BotStrategy {
         }
       }
     }
+
+    // Assign target items to bots (multi-bot coordination)
+    this.assignedTargets = this.orchestrator.assignTargets(bots, state.items, neededItemsMap, activeOrder);
 
     for (const bot of bots) {
       const action = this.decideAction(bot, state, dropOff);
@@ -293,10 +296,33 @@ export class BotStrategy {
       }
     }
 
-    // Try to pick up adjacent items first (even if carrying junk)
-    // Greedy: grab ANY adjacent needed item, not just assigned target
+    // Get orchestrator assignment for this bot
+    const assignment = this.assignedTargets?.get(bot.id);
+    let assignedItem: any = null;
+    if (assignment?.targetItemId) {
+      assignedItem = state.items.get(assignment.targetItemId);
+    }
+
+    // Build set of items assigned to OTHER bots (not this one)
+    const itemsAssignedToOthers = new Set<string>();
+    for (const [otherId, otherAssignment] of this.assignedTargets || []) {
+      if (otherId !== bot.id && otherAssignment.targetItemId) {
+        itemsAssignedToOthers.add(otherAssignment.targetItemId);
+      }
+    }
+
+    // Try to pick up the orchestrator-assigned item if adjacent
+    if (assignedItem && needed.includes(assignedItem.type)) {
+      const [ix, iy] = assignedItem.position;
+      const dist = Math.abs(ix - x) + Math.abs(iy - y);
+      if (dist <= 1) {
+        return { bot: bot.id, action: 'pick_up', item_id: assignedItem.id };
+      }
+    }
+
+    // Only grab adjacent items if they're not assigned to another bot
     for (const item of state.items.values()) {
-      if (needed.includes(item.type)) {
+      if (needed.includes(item.type) && !itemsAssignedToOthers.has(item.id) && item.id !== assignedItem?.id) {
         const [ix, iy] = item.position;
         const dist = Math.abs(ix - x) + Math.abs(iy - y);
 
@@ -305,6 +331,23 @@ export class BotStrategy {
           return { bot: bot.id, action: 'pick_up', item_id: item.id };
         }
       }
+    }
+
+    // If no assigned item is adjacent, try pathfinding to assigned target first
+    if (assignedItem && needed.includes(assignedItem.type)) {
+      const moveAction = this.getPathfinder(bot.id).moveTowardWithPath(bot.id, [x, y], assignedItem.position as [number, number], state.gridWidth, state.gridHeight, state.bots);
+
+      // If reachable, use it
+      if (moveAction.action !== 'wait') {
+        return moveAction;
+      }
+
+      // If unreachable and holding items, drop off first
+      if (moveAction.action === 'wait' && bot.inventory.length > 0) {
+        return this.getPathfinder(bot.id).moveTowardWithPath(bot.id, [x, y], [dropOff.x, dropOff.y], state.gridWidth, state.gridHeight, state.bots);
+      }
+
+      // If unreachable and empty inventory, fall through to try other items
     }
 
     // Check if carrying junk items (items NOT in the active order at all)
@@ -333,6 +376,16 @@ export class BotStrategy {
 
     // Try items in distance order until we find a reachable one
     for (const { item: targetItem } of candidateItems) {
+      // Skip if this is the assigned target (already tried above)
+      if (assignedItem && targetItem.id === assignedItem.id) {
+        continue;
+      }
+
+      // Skip if this item is assigned to another bot (multi-bot coordination)
+      if (itemsAssignedToOthers.has(targetItem.id)) {
+        continue;
+      }
+
       // Try to pathfind to this item
       const moveAction = this.getPathfinder(bot.id).moveTowardWithPath(bot.id, [x, y], targetItem.position as [number, number], state.gridWidth, state.gridHeight, state.bots);
 
