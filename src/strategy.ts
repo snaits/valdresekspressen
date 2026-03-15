@@ -329,6 +329,20 @@ export class BotStrategy {
       }
     }
 
+    // CRITICAL: If inventory is FULL and contains NO matching items for active order, drop junk
+    // This handles order changes where bot has full inventory of old items now completely useless
+    if (bot.inventory.length >= 3) {
+      const orderItemTypes = new Set(activeOrder.items_required);
+      const hasAnyMatchingType = bot.inventory.some((item: string) => orderItemTypes.has(item));
+
+      if (!hasAnyMatchingType) {
+        if (state.round < 150) {
+          console.log(`    [FULL-JUNK] Bot ${bot.id} has FULL inventory [${bot.inventory}] with NO matching items for order. Dropping off.`);
+        }
+        return this.getPathfinder(bot.id).moveTowardWithPath(bot.id, [x, y], [dropOff.x, dropOff.y], state.gridWidth, state.gridHeight, state.bots);
+      }
+    }
+
     // Remove items we're already carrying from the needed list
     for (const carrying of bot.inventory) {
       const idx = needed.indexOf(carrying);
