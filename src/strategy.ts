@@ -306,8 +306,29 @@ export class BotStrategy {
       }
     }
 
-    // If inventory full (3 items), go to drop-off
+    // If inventory full (3 items), need to drop off
+    // CRITICAL: If full inventory is all junk (non-matching), move AWAY to clear area, don't crowd dropoff
     if (bot.inventory.length >= 3) {
+      if (activeOrder) {
+        const orderItemTypes = new Set(activeOrder.items_required);
+        const hasAnyMatchingType = bot.inventory.some((item: string) => orderItemTypes.has(item));
+
+        if (!hasAnyMatchingType) {
+          // Full inventory of pure junk - move AWAY from dropoff to free space
+          // This prevents bots from crowding dropoff with useless items
+          if (state.round < 150) {
+            console.log(`    [FULL-JUNK] Bot ${bot.id} has FULL junk inventory. Moving AWAY to clear area.`);
+          }
+          // Try to move away: right, left, down, up
+          if (x + 1 < state.gridWidth) return { bot: bot.id, action: 'move_right' };
+          if (x - 1 >= 0) return { bot: bot.id, action: 'move_left' };
+          if (y + 1 < state.gridHeight) return { bot: bot.id, action: 'move_down' };
+          if (y - 1 >= 0) return { bot: bot.id, action: 'move_up' };
+          return { bot: bot.id, action: 'wait' };
+        }
+      }
+
+      // Full inventory with some matching items - go to dropoff normally
       return this.getPathfinder(bot.id).moveTowardWithPath(bot.id, [x, y], [dropOff.x, dropOff.y], state.gridWidth, state.gridHeight, state.bots);
     }
 
@@ -329,19 +350,6 @@ export class BotStrategy {
       }
     }
 
-    // CRITICAL: If inventory is FULL and contains NO matching items for active order, drop junk
-    // This handles order changes where bot has full inventory of old items now completely useless
-    if (bot.inventory.length >= 3) {
-      const orderItemTypes = new Set(activeOrder.items_required);
-      const hasAnyMatchingType = bot.inventory.some((item: string) => orderItemTypes.has(item));
-
-      if (!hasAnyMatchingType) {
-        if (state.round < 150) {
-          console.log(`    [FULL-JUNK] Bot ${bot.id} has FULL inventory [${bot.inventory}] with NO matching items for order. Dropping off.`);
-        }
-        return this.getPathfinder(bot.id).moveTowardWithPath(bot.id, [x, y], [dropOff.x, dropOff.y], state.gridWidth, state.gridHeight, state.bots);
-      }
-    }
 
     // Remove items we're already carrying from the needed list
     for (const carrying of bot.inventory) {
