@@ -20,6 +20,12 @@ export class GameStateManager {
     this.state.gridWidth = serverState.grid.width;
     this.state.gridHeight = serverState.grid.height;
     this.state.walls = serverState.grid.walls || [];  // Extract walls from grid
+
+    // Log walls on round 0
+    if (serverState.round === 0 && this.state.walls.length > 0) {
+      console.log(`\n📐 Walls from server: [${this.state.walls.map(w => `[${w[0]},${w[1]}]`).join(', ')}]\n`);
+    }
+
     this.state.dropOff = { x: serverState.drop_off[0], y: serverState.drop_off[1] };
     this.state.score = serverState.score;
 

@@ -141,8 +141,8 @@ export class BotStrategy {
       }
 
       this.lastOrderId = currentOrderId;
-      if (state.round >= 10) {
-        console.log(`  [DEBUG] Order changed to ${currentOrderId} - cleared blocked cells and blocked ${state.walls.length} walls for Bot ${bot.id}`);
+      if (state.round >= 0) {  // Always log
+        console.log(`  [WALLS] Order changed to ${currentOrderId} - cleared blocked cells and blocked ${state.walls.length} walls for Bot ${bot.id}`);
       }
     }
 
@@ -364,8 +364,8 @@ export class BotStrategy {
 
       // If unreachable AND holding items, drop off first then retry
       if (moveAction.action === 'wait' && bot.inventory.length > 0) {
-        if (state.round >= 10) {
-          console.log(`  [DEBUG Bot ${bot.id}] Can't reach item at (${nearest.position[0]}, ${nearest.position[1]}), going to dropoff first with [${bot.inventory.join(', ')}]`);
+        if (true) {  // Always log
+          console.log(`  [UNREACHABLE] Bot ${bot.id} can't reach item at (${nearest.position[0]}, ${nearest.position[1]}), going to dropoff first with [${bot.inventory.join(', ')}]`);
         }
         return this.getPathfinder(bot.id).moveTowardWithPath(bot.id, [x, y], [dropOff.x, dropOff.y], state.gridWidth, state.gridHeight, state.bots);
       }
