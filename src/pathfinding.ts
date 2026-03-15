@@ -11,6 +11,9 @@ export interface PathfindingBot {
  */
 export class Pathfinder {
   private blockedCells: Set<string> = new Set();
+  private cachedPath: [number, number][] = [];
+  private cachedTarget: [number, number] | null = null;
+  private pathIndex: number = 0;
 
   /**
    * Find shortest path from start to target using BFS
@@ -94,18 +97,27 @@ export class Pathfinder {
     gridHeight: number,
     bots: PathfindingBot[]
   ): BotAction {
-    const path = this.findPath(start, target, gridWidth, gridHeight, bots);
+    // Check if target changed or path is invalid
+    const targetChanged = !this.cachedTarget || this.cachedTarget[0] !== target[0] || this.cachedTarget[1] !== target[1];
+    const pathInvalid = this.pathIndex >= this.cachedPath.length;
 
-    if (path.length <= 1) {
+    if (targetChanged || pathInvalid) {
+      // Recalculate path
+      this.cachedPath = this.findPath(start, target, gridWidth, gridHeight, bots);
+      this.cachedTarget = target;
+      this.pathIndex = 0;
+    }
+
+    if (this.cachedPath.length <= 1) {
       // No path or already at target
       return { bot: botId, action: 'wait' };
     }
 
-    // Move to next step in path
-    const next = path[1];
+    // Get next step from cached path
+    const next = this.cachedPath[this.pathIndex + 1] || this.cachedPath[this.cachedPath.length - 1];
     const [x, y] = start;
 
-    // Check if next cell is occupied by another bot - if so, wait (can't enter occupied cell)
+    // Check if next cell is occupied by another bot
     const botPositions = new Set(
       bots.filter(b => !(b.position.x === x && b.position.y === y))
         .map(b => `${b.position.x},${b.position.y}`)
@@ -113,6 +125,9 @@ export class Pathfinder {
     if (botPositions.has(`${next[0]},${next[1]}`)) {
       return { bot: botId, action: 'wait' };
     }
+
+    // Move to next step
+    this.pathIndex++;
 
     if (next[0] > x) return { bot: botId, action: 'move_right' };
     if (next[0] < x) return { bot: botId, action: 'move_left' };
@@ -141,6 +156,10 @@ export class Pathfinder {
    */
   clearBlockedCells(): void {
     this.blockedCells.clear();
+    // Also clear path cache since the valid paths might have changed
+    this.cachedPath = [];
+    this.cachedTarget = null;
+    this.pathIndex = 0;
   }
 
   /**
