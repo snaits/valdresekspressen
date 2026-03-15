@@ -368,4 +368,169 @@ describe('Pathfinder - BFS Algorithm', () => {
       expect(pathfinder.isBlocked(5, 5)).toBe(false);
     });
   });
+
+  describe('Server Walls Integration', () => {
+    it('should block server walls to prevent pathfinding through them', () => {
+      // Simulate server sending walls as [[x,y], [x,y], ...]
+      const serverWalls: [number, number][] = [
+        [1, 1],
+        [1, 2],
+        [3, 1],
+        [3, 2],
+      ];
+
+      // Block all walls (as strategy.ts does)
+      for (const [wx, wy] of serverWalls) {
+        pathfinder.blockCell(wx, wy);
+      }
+
+      // Verify all walls are blocked
+      for (const [wx, wy] of serverWalls) {
+        expect(pathfinder.isBlocked(wx, wy)).toBe(true);
+      }
+
+      // Pathfinding should avoid these blocked walls
+      const path = pathfinder.findPath([0, 0], [2, 2], 10, 10, []);
+      for (const [wx, wy] of serverWalls) {
+        expect(path).not.toContainEqual([wx, wy]);
+      }
+    });
+
+    it('should route around server walls to reach target', () => {
+      // Create a wall barrier at x=5 (vertical line)
+      const serverWalls: [number, number][] = [
+        [5, 2],
+        [5, 3],
+        [5, 4],
+        [5, 5],
+        [5, 6],
+        [5, 7],
+      ];
+
+      for (const [wx, wy] of serverWalls) {
+        pathfinder.blockCell(wx, wy);
+      }
+
+      // Should find path around left side or right side, but not through wall
+      const path = pathfinder.findPath([2, 4], [8, 4], 10, 10, []);
+      expect(path.length).toBeGreaterThan(0);
+      expect(path[path.length - 1]).toEqual([8, 4]);
+
+      // Verify path avoids all walls
+      for (const coord of path) {
+        for (const [wx, wy] of serverWalls) {
+          expect(coord).not.toEqual([wx, wy]);
+        }
+      }
+    });
+
+    it('should handle complex wall maze from server', () => {
+      // Server sends a complex wall pattern
+      const serverWalls: [number, number][] = [
+        // Top barrier
+        [3, 1],
+        [4, 1],
+        [5, 1],
+        [6, 1],
+        // Left side
+        [3, 2],
+        [3, 3],
+        // Right side
+        [6, 2],
+        [6, 3],
+        // Bottom barrier
+        [3, 4],
+        [4, 4],
+        [5, 4],
+        [6, 4],
+      ];
+
+      for (const [wx, wy] of serverWalls) {
+        pathfinder.blockCell(wx, wy);
+      }
+
+      // Bot should navigate around the maze
+      const action = pathfinder.moveTowardWithPath(
+        0,
+        [2, 2],
+        [7, 2],
+        10,
+        10,
+        []
+      );
+
+      // Should make a valid move (not 'wait' since target is reachable)
+      expect(action.action).not.toBe('wait');
+      expect(['move_up', 'move_down', 'move_left', 'move_right']).toContain(
+        action.action
+      );
+    });
+
+    it('should clear server walls when new game state arrives', () => {
+      // Simulate first round with walls
+      const round1Walls: [number, number][] = [
+        [2, 2],
+        [3, 3],
+        [4, 4],
+      ];
+
+      for (const [wx, wy] of round1Walls) {
+        pathfinder.blockCell(wx, wy);
+      }
+
+      // Verify walls are blocked
+      expect(pathfinder.getBlockedCells().length).toBe(3);
+
+      // New order arrives - clear blocked cells (as strategy.ts does when order changes)
+      pathfinder.clearBlockedCells();
+
+      // Block new server walls
+      const round2Walls: [number, number][] = [
+        [7, 7],
+        [8, 8],
+      ];
+
+      for (const [wx, wy] of round2Walls) {
+        pathfinder.blockCell(wx, wy);
+      }
+
+      // Should have only new walls
+      const blockedCells = pathfinder.getBlockedCells();
+      expect(blockedCells.length).toBe(2);
+      expect(blockedCells).toContain('7,7');
+      expect(blockedCells).toContain('8,8');
+      expect(pathfinder.isBlocked(2, 2)).toBe(false);
+    });
+
+    it('should prevent pathfinding through walls even with bot interference', () => {
+      // Server walls
+      const serverWalls: [number, number][] = [
+        [5, 3],
+        [5, 4],
+        [5, 5],
+      ];
+
+      for (const [wx, wy] of serverWalls) {
+        pathfinder.blockCell(wx, wy);
+      }
+
+      // Another bot on the field
+      const bots: PathfindingBot[] = [
+        { position: { x: 4, y: 3 } },
+      ];
+
+      // Try to go from (3,4) to (7,4) - must go around wall at x=5
+      const path = pathfinder.findPath([3, 4], [7, 4], 10, 10, bots);
+      expect(path.length).toBeGreaterThan(0);
+      expect(path[path.length - 1]).toEqual([7, 4]);
+
+      // Should avoid wall AND bot
+      for (const coord of path) {
+        for (const [wx, wy] of serverWalls) {
+          expect(coord).not.toEqual([wx, wy]);
+        }
+        expect(coord).not.toEqual([4, 3]);
+      }
+    });
+  });
 });
