@@ -287,9 +287,20 @@ export class BotStrategy {
           }
           return { bot: bot.id, action: 'drop_off' };
         }
-        // If we're holding items that don't match, move away to let other bots try
+
+        // CRITICAL: If holding ANY items that DON'T match active order, DROP THEM ANYWAY
+        // This clears inventory even if items won't deliver, freeing up slots for new items
+        // This is more important than trying to keep items for future orders
+        if (bot.inventory.length > 0) {
+          if (state.round < 150) {
+            console.log(`    [DROP-JUNK] Bot ${bot.id} at dropoff dropping junk [${bot.inventory}] to free inventory slot.`);
+          }
+          return { bot: bot.id, action: 'drop_off' };
+        }
+
+        // No inventory to drop, move away to let other bots try
         if (state.round < 150) {
-          console.log(`    [NO-MATCH] Bot ${bot.id} at dropoff (${x},${y}) but inv=[${bot.inventory}] doesn't match items_needed=[${itemsNeeded}]`);
+          console.log(`    [NO-MATCH] Bot ${bot.id} at dropoff (${x},${y}) but inv=[] - moving away.`);
         }
         // Move away to let other bots try - try in order: right, left, down, up
         if (x + 1 < state.gridWidth) return { bot: bot.id, action: 'move_right' };

@@ -336,8 +336,8 @@ describe('BotStrategy - Movement Logic', () => {
       const actions = strategy.decideBotActions();
 
       // Should NOT send drop_off (butters don't match)
-      // Should move to pick yogurt instead
-      expect(actions[0].action).toBe('move_right'); // Move toward yogurt
+      // Actually: SHOULD drop junk butter to free inventory, then collect yogurt
+      expect(actions[0].action).toBe('drop_off'); // Drop junk to clear slot
     });
   });
 
@@ -684,7 +684,8 @@ describe('BotStrategy - Movement Logic', () => {
       const actions = strategy.decideBotActions();
 
       // Should move away to pick yogurt, not drop-off
-      expect(actions[0].action).toBe('move_right');
+      // Actually: should DROP junk items first to free inventory, THEN collect yogurt
+      expect(actions[0].action).toBe('drop_off'); // Drop non-matching items
     });
   });
 
@@ -1435,8 +1436,8 @@ describe('BotStrategy - Movement Logic', () => {
       const actions = strategy.decideBotActions();
 
       // At dropoff but holding junk item (cheese not in order)
-      // Should NOT drop junk, will move away to collect needed items
-      expect(actions[0].action).not.toBe('drop_off');
+      // Should DROP junk to free inventory slot immediately
+      expect(actions[0].action).toBe('drop_off');
     });
 
     it('should drop off duplicate items (e.g. [milk, milk] when order needs milk)', () => {

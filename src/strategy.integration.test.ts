@@ -45,10 +45,10 @@ describe('BotStrategy - Multi-Round Integration Tests', () => {
     gameState.updateFromServer(round105);
     let actions = strategy.decideBotActions();
 
-    // Bot 0 at dropoff with non-matching items should MOVE AWAY to escape
-    expect(actions[0].action).not.toBe('drop_off'); // Can't drop useless items
-    expect(['move_up', 'move_down', 'move_left', 'move_right']).toContain(actions[0].action);
-    console.log(`Round 105 - Bot 0 at dropoff moves: ${actions[0].action}`);
+    // Bot 0 at dropoff with non-matching items should DROP them to free inventory
+    expect(actions[0].action).toBe('drop_off'); // Drop junk to clear slot and unblock
+    // (This actually helps - Bot 0 clears inventory and Bot 2 can move in)
+    console.log(`Round 105 - Bot 0 at dropoff drops: ${actions[0].action}`);
 
     // Bot 2 with FULL junk inventory should PATHFIND TO DROPOFF to clear junk
     // (If it does this, it frees path for Bot 0)
