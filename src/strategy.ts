@@ -7,8 +7,7 @@ export class BotStrategy {
   private gameState: GameStateManager;
   private orchestrator: BotOrchestrator;
   private pathfinders: Map<number, Pathfinder> = new Map(); // One pathfinder per bot
-  private lastBotStates: Map<number, { pos: [number, number], action: string, stuckCount: number, dropoffFailCount?: number, lastInventorySize?: number, failedDropoffInventorySize?: number, failedDropoffSinceRound?: number, lastOrderIdSeen?: string }> = new Map();
-  private lastOrderId: string | undefined;
+  private lastBotStates: Map<number, { pos: [number, number], action: string, stuckCount: number, dropoffFailCount?: number, lastInventorySize?: number, failedDropoffInventorySize?: number, failedDropoffSinceRound?: number, lastOrderIdSeen?: string, wallsLoadedForOrderId?: string }> = new Map();
   private assignedTargets: Map<number, BotAssignment> = new Map(); // Current round's assigned targets
 
   constructor(gameState: GameStateManager) {
@@ -21,6 +20,24 @@ export class BotStrategy {
       this.pathfinders.set(botId, new Pathfinder());
     }
     return this.pathfinders.get(botId)!;
+  }
+
+  /**
+   * Try BFS pathfinding first; if it returns 'wait' (no path found or blocked by bots),
+   * fall back to naive directional movement toward the target.
+   */
+  private pathfindOrFallback(
+    botId: number,
+    start: [number, number],
+    target: [number, number],
+    gridWidth: number,
+    gridHeight: number,
+    bots: any[],
+    round: number
+  ): BotAction {
+    const moveAction = this.getPathfinder(botId).moveTowardWithPath(botId, start, target, gridWidth, gridHeight, bots);
+    if (moveAction.action !== 'wait') return moveAction;
+    return this.fallbackMovement(botId, start[0], start[1], target[0], target[1], round);
   }
 
   /**
@@ -115,6 +132,7 @@ export class BotStrategy {
         // decideAction modifies lastState directly, and prevState points to the same object
         failedDropoffInventorySize: prevState?.failedDropoffInventorySize,
         failedDropoffSinceRound: prevState?.failedDropoffSinceRound,
+        wallsLoadedForOrderId: prevState?.wallsLoadedForOrderId,
       });
     }
 
@@ -131,6 +149,18 @@ export class BotStrategy {
     // CRITICAL: Detect when active order CHANGES for a bot
     // Old inventory from previous order should be treated as junk in new order
     const lastState = this.lastBotStates.get(bot.id);
+
+    // Pre-load walls per-bot independently (not shared across bots)
+    if (lastState?.wallsLoadedForOrderId !== currentOrderId) {
+      const pathfinder = this.getPathfinder(bot.id);
+      pathfinder.clearBlockedCells();
+      for (const [wx, wy] of state.walls) {
+        pathfinder.blockCell(wx, wy);
+      }
+      if (lastState) {
+        lastState.wallsLoadedForOrderId = currentOrderId;
+      }
+    }
     if (lastState && lastState.lastOrderIdSeen !== currentOrderId && lastState.lastOrderIdSeen !== undefined) {
       // Order changed! Clear the rejected-inventory flag so bot can try the new order
       if (lastState.failedDropoffInventorySize !== undefined) {
@@ -148,7 +178,7 @@ export class BotStrategy {
           if (x === dropOff.x && y === dropOff.y) {
             return { bot: bot.id, action: 'drop_off' };
           }
-          return this.getPathfinder(bot.id).moveTowardWithPath(bot.id, [x, y], [dropOff.x, dropOff.y], state.gridWidth, state.gridHeight, state.bots);
+          return this.pathfindOrFallback(bot.id, [x, y], [dropOff.x, dropOff.y], state.gridWidth, state.gridHeight, state.bots, state.round);
         }
       }
     }
@@ -165,19 +195,6 @@ export class BotStrategy {
         }
       }
       itemsStillNeeded.push(...itemsNeeded);
-    }
-
-    // Clear blocked cells when order changes (new items on map)
-    if (!this.lastOrderId || this.lastOrderId !== currentOrderId) {
-      const pathfinder = this.getPathfinder(bot.id);
-      pathfinder.clearBlockedCells();
-
-      // Block all walls from the server
-      for (const [wx, wy] of state.walls) {
-        pathfinder.blockCell(wx, wy);
-      }
-
-      this.lastOrderId = currentOrderId;
     }
 
     // Detect stuck moves and learn obstacles
@@ -221,7 +238,7 @@ export class BotStrategy {
 
     // If stuck with items, try to deliver them via pathfinding
     if (isStuck && bot.inventory.length > 0) {
-      return this.getPathfinder(bot.id).moveTowardWithPath(bot.id, [x, y], [dropOff.x, dropOff.y], state.gridWidth, state.gridHeight, state.bots);
+      return this.pathfindOrFallback(bot.id, [x, y], [dropOff.x, dropOff.y], state.gridWidth, state.gridHeight, state.bots, state.round);
     }
 
     // If stuck with no items, try pathfinding to multiple items (skip unreachable ones)
@@ -446,14 +463,14 @@ export class BotStrategy {
       }
 
       // Full inventory with some matching items - go to dropoff normally
-      return this.getPathfinder(bot.id).moveTowardWithPath(bot.id, [x, y], [dropOff.x, dropOff.y], state.gridWidth, state.gridHeight, state.bots);
+      return this.pathfindOrFallback(bot.id, [x, y], [dropOff.x, dropOff.y], state.gridWidth, state.gridHeight, state.bots, state.round);
     }
 
     // Active order was already found above, check if it exists
     if (!activeOrder) {
       // No orders, wait or go drop off if holding anything
       if (bot.inventory.length > 0) {
-        return this.getPathfinder(bot.id).moveTowardWithPath(bot.id, [x, y], [dropOff.x, dropOff.y], state.gridWidth, state.gridHeight, state.bots);
+        return this.pathfindOrFallback(bot.id, [x, y], [dropOff.x, dropOff.y], state.gridWidth, state.gridHeight, state.bots, state.round);
       }
       return { bot: bot.id, action: 'wait' };
     }
@@ -494,7 +511,7 @@ export class BotStrategy {
           if (state.round < 150) {
             console.log(`    [FULL-JUNK-MOVE] Bot ${bot.id} FULL with junk [${junkItems}] - must go to dropoff`);
           }
-          return this.getPathfinder(bot.id).moveTowardWithPath(bot.id, [x, y], [dropOff.x, dropOff.y], state.gridWidth, state.gridHeight, state.bots);
+          return this.pathfindOrFallback(bot.id, [x, y], [dropOff.x, dropOff.y], state.gridWidth, state.gridHeight, state.bots, state.round);
         }
       }
     }
@@ -556,10 +573,12 @@ export class BotStrategy {
 
       // If unreachable and holding items, drop off first
       if (bot.inventory.length > 0) {
-        return this.getPathfinder(bot.id).moveTowardWithPath(bot.id, [x, y], [dropOff.x, dropOff.y], state.gridWidth, state.gridHeight, state.bots);
+        return this.pathfindOrFallback(bot.id, [x, y], [dropOff.x, dropOff.y], state.gridWidth, state.gridHeight, state.bots, state.round);
       }
 
-      // If unreachable and empty, wait (can't reach assigned item)
+      // If unreachable and empty, try fallback movement toward assigned item
+      const fallback = this.fallbackMovement(bot.id, x, y, assignedItem.position[0], assignedItem.position[1], state.round);
+      if (fallback.action !== 'wait') return fallback;
       return { bot: bot.id, action: 'wait' };
     }
 
@@ -612,6 +631,19 @@ export class BotStrategy {
         const [ix, iy] = item.position;
         const dist = Math.abs(ix - x) + Math.abs(iy - y);
 
+        // Sequence check - only pick up items matching the next few positions
+        if (bot.inventory.length > 0) {
+          const nextPosition2 = activeOrder.items_delivered.length;
+          let itemBelongsInNextSequence2 = false;
+          for (let pos = nextPosition2; pos < Math.min(nextPosition2 + 3, activeOrder.items_required.length); pos++) {
+            if (activeOrder.items_required[pos] === item.type) {
+              itemBelongsInNextSequence2 = true;
+              break;
+            }
+          }
+          if (!itemBelongsInNextSequence2) continue;
+        }
+
         // If adjacent or at location, pick up
         if (dist <= 1) {
           if (state.round < 150) {
@@ -627,19 +659,28 @@ export class BotStrategy {
 
     // If carrying junk and there are still items to pick AND not at drop-off, go drop junk first
     if (junkItems.length > 0 && !(x === dropOff.x && y === dropOff.y) && needed.length > 0) {
-      return this.getPathfinder(bot.id).moveTowardWithPath(bot.id, [x, y], [dropOff.x, dropOff.y], state.gridWidth, state.gridHeight, state.bots);
+      return this.pathfindOrFallback(bot.id, [x, y], [dropOff.x, dropOff.y], state.gridWidth, state.gridHeight, state.bots, state.round);
     }
 
     // CRITICAL: Only try other items if there was NO orchestrator assignment
     // If we had an assignment, we already tried it above and it was unreachable/incomplete
     // Don't fall back to other items - wait for assignment or go deliver what we have
     if (!assignedItem) {
-      // Build list of all needed items sorted by distance
+      // Build list of items matching ONLY the next few sequence positions
+      // This prevents bots from running across the map to grab items they can't deliver yet
       const botZone = this.getZone([x, y], state.gridWidth, state.gridHeight);
       const candidateItems: Array<{ item: any; dist: number; inZone: boolean }> = [];
 
+      // Determine which item types are needed for the next few sequence positions
+      const nextPosition = activeOrder.items_delivered.length;
+      const maxLookahead = Math.min(nextPosition + Math.max(3, state.bots.length), activeOrder.items_required.length);
+      const sequenceTypes = new Set<string>();
+      for (let pos = nextPosition; pos < maxLookahead; pos++) {
+        sequenceTypes.add(activeOrder.items_required[pos]);
+      }
+
       for (const item of state.items.values()) {
-        if (needed.includes(item.type)) {
+        if (needed.includes(item.type) && sequenceTypes.has(item.type)) {
           const dist = Math.abs(item.position[0] - x) + Math.abs(item.position[1] - y);
           const itemZone = this.getZone(item.position as [number, number], state.gridWidth, state.gridHeight);
           const inZone = itemZone === botZone;
@@ -662,7 +703,7 @@ export class BotStrategy {
 
         // If unreachable AND holding items, drop off first then retry
         if (moveAction.action === 'wait' && bot.inventory.length > 0) {
-          return this.getPathfinder(bot.id).moveTowardWithPath(bot.id, [x, y], [dropOff.x, dropOff.y], state.gridWidth, state.gridHeight, state.bots);
+          return this.pathfindOrFallback(bot.id, [x, y], [dropOff.x, dropOff.y], state.gridWidth, state.gridHeight, state.bots, state.round);
         }
 
         // If reachable (action is not 'wait'), use it
@@ -670,16 +711,18 @@ export class BotStrategy {
           return moveAction;
         }
 
-        // If unreachable and empty inventory, skip this item and try next
-        if (moveAction.action === 'wait' && bot.inventory.length === 0) {
-          continue;
+        // If unreachable and empty inventory, try fallback movement toward this item
+        if (bot.inventory.length === 0) {
+          const fallback = this.fallbackMovement(bot.id, x, y, targetItem.position[0], targetItem.position[1], state.round);
+          if (fallback.action !== 'wait') return fallback;
+          continue; // fallback also failed (already at target?), try next item
         }
       }
     }
 
     // If holding items but no more needed, go deliver
     if (bot.inventory.length > 0) {
-      return this.getPathfinder(bot.id).moveTowardWithPath(bot.id, [x, y], [dropOff.x, dropOff.y], state.gridWidth, state.gridHeight, state.bots);
+      return this.pathfindOrFallback(bot.id, [x, y], [dropOff.x, dropOff.y], state.gridWidth, state.gridHeight, state.bots, state.round);
     }
 
     // No items found - wait

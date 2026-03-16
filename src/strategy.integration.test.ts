@@ -49,7 +49,7 @@ describe('BotStrategy - Multi-Round Integration Tests', () => {
     // Bot 0 should try drop_off since it's at dropoff
     console.log(`Round 1 - Bot 0 action: ${actions[0].action}`);
     expect(actions[0].action).toBe('drop_off'); // Attempt drop
-    expect(actions[1].action).toBe('wait'); // Bot 1 stuck waiting
+    expect(actions[1].action).toBe('move_down'); // Bot 1 tries to reach dropoff via fallback
 
     // Round 2: Server rejects drop_off - inventory unchanged
     // Same position, same inventory

@@ -116,6 +116,47 @@ export class BotOrchestrator {
       currentPosition++;
     }
 
+    // Second pass: assign remaining empty bots to unassigned needed items
+    // This prevents idle bots when there are still items to collect on the map
+    if (assignedBotIds.size < bots.length) {
+      // Build set of types still needed in the sequence window
+      const seqTypes = new Set<string>();
+      const maxPos = Math.min(nextPosition + Math.max(3, bots.length), activeOrder.items_required.length);
+      for (let pos = nextPosition; pos < maxPos; pos++) {
+        seqTypes.add(activeOrder.items_required[pos]);
+      }
+
+      const remainingItems = Array.from(neededItems.values()).filter(
+        item => !assignedItemIds.has(item.id) && seqTypes.has(item.type)
+      );
+
+      for (const bot of bots) {
+        if (assignedBotIds.has(bot.id)) continue;
+        if (bot.inventory.length > 0) continue; // Only assign empty bots
+
+        let bestItem = null;
+        let bestDist = Infinity;
+        for (const item of remainingItems) {
+          if (assignedItemIds.has(item.id)) continue;
+          const dist = Math.abs(item.position[0] - bot.position.x) + Math.abs(item.position[1] - bot.position.y);
+          if (dist < bestDist) {
+            bestDist = dist;
+            bestItem = item;
+          }
+        }
+
+        if (bestItem) {
+          assignedBotIds.add(bot.id);
+          assignedItemIds.add(bestItem.id);
+          assignments.set(bot.id, {
+            botId: bot.id,
+            targetItemId: bestItem.id,
+            rationale: `extra_${bestItem.type}_dist_${bestDist}`,
+          });
+        }
+      }
+    }
+
     // Assign remaining unassigned bots to wait
     for (const bot of bots) {
       if (!assignments.has(bot.id)) {

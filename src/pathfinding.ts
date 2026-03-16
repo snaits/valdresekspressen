@@ -40,11 +40,6 @@ export class Pathfinder {
     const visited = new Set<string>();
     visited.add(`${start[0]},${start[1]}`);
 
-    // Get other bot positions
-    const botPositions = new Set(
-      bots.map(b => `${b.position.x},${b.position.y}`)
-    );
-
     while (queue.length > 0) {
       const { pos, path } = queue.shift()!;
       const [x, y] = pos;
@@ -66,12 +61,12 @@ export class Pathfinder {
         // Check visited
         if (visited.has(key)) continue;
 
-        // Check if blocked (known obstacle)
+        // Check if blocked (known obstacle - walls only)
         if (this.blockedCells.has(key)) continue;
 
-        // Check if other bot - but allow if it's the target (for dropoff coordination)
-        const isBot = botPositions.has(key);
-        if (isBot && !(nx === target[0] && ny === target[1])) continue;
+        // NOTE: Bots are NOT treated as obstacles in BFS pathfinding.
+        // Bots are temporary obstacles that move each round.
+        // moveTowardWithPath handles bot collision by waiting one turn.
 
         // Found target!
         if (nx === target[0] && ny === target[1]) {
